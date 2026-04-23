@@ -99,10 +99,10 @@ The full IN training sweep, to be run in Milestone 3:
 | Axis | Values | Count |
 |---|---|---|
 | Loss variant | Intercept, Vis, Vis+Occ, Vis&Occ | 4 |
-| Hidden-unit count | Rajalingham's sweep values (TBD — extracted in Milestone 1) | ~3–5 |
+| Hidden-unit count | 10, 20, 40 (exact values from Rajalingham's sweep — confirmed Milestone 1) | 3 |
 | Seed | 0, 1, 2, 3, 4 (min 5 per CONSTITUTION) | 5 |
 
-Estimated total: **60–100 training runs**. At ~4 hr/run on a single GPU (NF3 ceiling), this is 10–17 days of serial wall-clock, or 2–3 days if 4+ runs can be queued in parallel on the available GPU. Revisit if the Milestone 1 hidden-unit extraction lands at the high end of the range.
+Estimated total: **60 training runs** (4 × 3 × 5). At ~4 hr/run on a single GPU (NF3 ceiling), serial wall-clock would be ~10 days. With cluster access and parallel job submission (SLURM array jobs), the full sweep can complete in a few hours of wall-clock if 60 GPUs are available simultaneously, or ~1–2 days with a smaller allocation.
 
 ## Environment / setup
 

@@ -13,12 +13,16 @@ Goal: everything needed to start real work exists — repo structure, pinned dep
 - [ ] Create `.claude/commands/freshstart.md` and `.claude/commands/summcommit.md` (copied verbatim from project-bootstrap skill — already done by the bootstrap run).
 - [ ] Verify upstream higgsfield IN code runs out of the box: identify entry points, run any existing demo, confirm what hidden-state extraction hooks exist. Log findings in SCRATCHPAD.
 - [ ] Clone jazlab/MentalPong locally (as a sibling directory or a read-only git reference — NOT inside this repo). Inspect:
-  - [ ] What hidden-unit values did Rajalingham actually sweep? Record the exact list in PLANNING.md.
-  - [ ] What format is the Zenodo release in (MAT/HDF5/NPZ/CSV)? Document the schema.
-  - [ ] Do they release per-RNN Fig. 5B curves, or only aggregated traces? If per-RNN, what's the file structure?
-  - [ ] What exactly do their RNNs receive as input (pixel array shape, normalization, any preprocessing)? Needed to defend our "matched information content" claim for the IN inputs.
+  - [x] What hidden-unit values did Rajalingham actually sweep? **10, 20, 40** — recorded in PLANNING.md (2026-04-22).
+  - [x] What format is the Zenodo release in? **Python pickle (.pkl)** — full schema documented in SCRATCHPAD.md (2026-04-22).
+  - [x] Do they release per-RNN Fig. 5B curves, or only aggregated traces? **Per-RNN individual curves released** in `offline_rnn_neural_responses_reliable_50.pkl` — file structure in SCRATCHPAD.md.
+  - [x] What exactly do their RNNs receive as input? **100-dim Gabor + PCA features** (not raw pixels) — documented in SCRATCHPAD.md.
 - [ ] Download the Rajalingham Zenodo release into `data/dmfc/`. Write a one-paragraph README in that directory documenting what was downloaded and from where.
 - [ ] Resolve the four open architectural questions listed in PLANNING.md; update PLANNING or promote any remaining ambiguities into explicit tasks in later milestones.
+  - [x] Zenodo release format → .pkl; schema documented in SCRATCHPAD.md.
+  - [x] Per-RNN Fig. 5B curves available? → Yes; structure documented in SCRATCHPAD.md.
+  - [x] Hidden-unit sweep values → 10, 20, 40; updated in PLANNING.md experimental matrix.
+  - [ ] Wall reflection — graph edge or env-level? Still open; default to env-level per PLANNING decision.
 - [ ] Write a minimal `tests/test_smoke.py` that imports every `dmfc.*` subpackage and asserts they load. Run `pytest` to confirm the testing infrastructure works.
 
 ## Milestone 2 — Mental Pong environment
@@ -26,7 +30,7 @@ Goal: everything needed to start real work exists — repo structure, pinned dep
 Goal: a deterministic, seed-controlled, unit-tested Mental Pong env that reproduces Rajalingham's 79 eval conditions and whose trajectories match their spec exactly.
 
 - [ ] Implement `dmfc/envs/mental_pong.py`: Gym-style env with `reset(seed, condition_id)`, `step(action)`, `render()`. Ball kinematics: rightward motion only, constant speed, reflections off horizontal walls, deterministic given seed.
-- [ ] Encode the visible/occluded epoch logic per Rajalingham's spec (visible 15–45 steps, occluded 15–45 steps, bounces 0 or 1, 16.7 ms/step to match their timing).
+- [ ] Encode the visible/occluded epoch logic per Rajalingham's spec (visible/occluded epoch lengths vary by condition; epoch masks stored in `valid_meta_sample_full.pkl`; use **50 ms bins** matching the neural data, not 16.7 ms; bounces ∈ {0, 1}).
 - [ ] Load or construct the 79 eval conditions. If the Zenodo release contains them: parse and cache. If not: construct by sampling the parameter ranges Rajalingham described (`x0 ∈ [-8, 0]°`, `y0 ∈ [-10, 10]°`, `dx0 ∈ [6.25, 18.75]°/s`, `dy0 ∈ [-18.75, 18.75]°/s`) subject to the constraints.
 - [ ] `tests/test_mental_pong.py`: unit tests against hand-computed expected trajectories for at least 3 fixed seeds. Cover: (a) no-bounce condition, (b) one-bounce condition, (c) occluder timing, (d) interception geometry at trial end.
 - [ ] CLI: `python -m dmfc.envs.mental_pong --render --seed 0 --condition 0` renders a single condition for visual inspection (PRD F1).
