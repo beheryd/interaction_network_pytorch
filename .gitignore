@@ -1,2 +1,19 @@
 .DS_Store
 **/.DS_Store
+
+# Project artifacts (per CONSTITUTION reproducibility + neural-data-handling rules)
+runs/
+data/dmfc
+*.pt
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# uv
+# uv.lock IS tracked (it's the reproducibility source of truth)

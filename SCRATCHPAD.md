@@ -196,3 +196,34 @@ IN hidden states directly against Rajalingham's released RNN outputs.
 ### Open problems
 
 (all resolved as of 2026-04-24)
+
+## Milestone 1 closeout — repo scaffolding (2026-04-25)
+
+Closed out the four remaining Milestone 1 items in one pass after confirming the Zenodo bundle at `~/Downloads/MentalPong/` already covers what the "clone jazlab/MentalPong" task asked for (it ships `code/` alongside `data/`).
+
+### What got built
+
+- `dmfc/` package with five subpackages (`envs`, `models`, `training`, `analysis`, `rajalingham`), each a stub `__init__.py`. Empty for now; first real code lands in Milestone 2.
+- `configs/`, `runs/`, `tests/`, `notebooks/` directories. `runs/` is gitignored per CONSTITUTION (run artifacts only).
+- `data/dmfc -> ~/Downloads/MentalPong/data` (symlink). `data/README.md` (tracked) documents source + recreate-on-other-machine steps. `data/dmfc` itself is gitignored.
+- `pyproject.toml`: PEP 621 `[project]` with 9 runtime + 3 dev deps, all `==`-pinned. `uv lock` resolves a 50-package tree cleanly. `uv.lock` is tracked.
+- `tests/test_smoke.py`: 7 passing tests (6 subpackage imports + 1 core-deps import).
+- `.gitignore`: added `runs/`, `data/dmfc`, `*.pt`, `.venv/`, `__pycache__/`, ruff/mypy/pytest cache dirs.
+- `VERSIONS.md`: rewritten with resolved exact versions and rationale for each pin.
+
+### Pin choices worth remembering
+
+- **numpy 1.26.4** (not 2.x) — deliberate. The Zenodo `.pkl` files were produced under numpy 1; numpy 2 has caused pickle-roundtrip dtype shifts in similar scientific stacks. If a future task forces numpy 2, regenerate any cached analysis pickles.
+- **torch 2.4.1** — modern stable. Upstream higgsfield code is pre-PEP 518 and has no torch pin; per CONSTITUTION fork discipline, if the upstream `InteractionNetwork` doesn't run under torch 2.4 we copy the file into `dmfc/models/` and patch the copy rather than editing in place.
+- **Python 3.11.15** with upper bound `<3.12` — keeps the torch/numpy/scipy lockstep predictable until we have a reason to bump.
+
+### Validation done
+
+- `uv sync --extra dev` installed 50 packages without conflict.
+- `python -c "import torch, numpy, scipy, sklearn, pandas, matplotlib, seaborn, yaml, pytest, ruff, mypy"` — all import.
+- `pytest`: 7 passed, 14 warnings (matplotlib pyparsing deprecations — known, not ours).
+- `ruff check dmfc tests` + `ruff format --check dmfc tests` — both clean.
+
+### Carry-forward note for Milestone 3
+
+Upstream `Interaction Network.ipynb` has not been re-executed under torch 2.4. The read-through that documented `effect_receivers` as the per-object hidden state stands, but we'll find out in Milestone 3 whether the actual upstream `InteractionNetwork` class instantiates and runs unmodified. If it doesn't, copy `Physics_Engine.py` (or whichever upstream file breaks) into `dmfc/models/` with an upstream-origin comment and patch the copy.

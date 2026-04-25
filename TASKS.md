@@ -7,23 +7,23 @@ Generated from PRD.md + PLANNING.md. Work one milestone at a time. Mark `[x]` wh
 
 Goal: everything needed to start real work exists — repo structure, pinned deps, Rajalingham data inspected, upstream code understood. No training yet.
 
-- [ ] Create the `dmfc/` package skeleton per PLANNING: `envs/`, `models/`, `training/`, `analysis/`, `rajalingham/`, each with a stub `__init__.py`.
-- [ ] Create `configs/`, `runs/`, `data/dmfc/`, `tests/`, `notebooks/` directories. Add `.gitignore` entries for `runs/`, `data/dmfc/`, `.venv/`, `__pycache__/`, `*.pt`.
-- [ ] Set up `pyproject.toml` with uv + pinned deps (torch, numpy, scipy, scikit-learn, matplotlib, seaborn, pandas, pyyaml, pytest, ruff, mypy). Record exact versions in VERSIONS.md.
-- [ ] Create `.claude/commands/freshstart.md` and `.claude/commands/summcommit.md` (copied verbatim from project-bootstrap skill — already done by the bootstrap run).
-- [ ] Verify upstream higgsfield IN code runs out of the box: identify entry points, run any existing demo, confirm what hidden-state extraction hooks exist. Log findings in SCRATCHPAD.
-- [ ] Clone jazlab/MentalPong locally (as a sibling directory or a read-only git reference — NOT inside this repo). Inspect:
+- [x] Create the `dmfc/` package skeleton per PLANNING: `envs/`, `models/`, `training/`, `analysis/`, `rajalingham/`, each with a stub `__init__.py`. (2026-04-25)
+- [x] Create `configs/`, `runs/`, `data/dmfc/`, `tests/`, `notebooks/` directories. Add `.gitignore` entries for `runs/`, `data/dmfc/`, `.venv/`, `__pycache__/`, `*.pt`. (2026-04-25; `data/dmfc` is a symlink to `~/Downloads/MentalPong/data`)
+- [x] Set up `pyproject.toml` with uv + pinned deps (torch, numpy, scipy, scikit-learn, matplotlib, seaborn, pandas, pyyaml, pytest, ruff, mypy). Record exact versions in VERSIONS.md. (2026-04-25; 50-package tree resolved via `uv lock`)
+- [x] Create `.claude/commands/freshstart.md` and `.claude/commands/summcommit.md` (already in `.claude/commands/` from the project-bootstrap run).
+- [x] Verify upstream higgsfield IN code runs out of the box: identify entry points, run any existing demo, confirm what hidden-state extraction hooks exist. Log findings in SCRATCHPAD. **Done via read-through** of `Interaction Network.ipynb` (2026-04-24); `effect_receivers` identified as the per-object hidden state. Notebook will be exercised live in Milestone 3.
+- [x] Clone jazlab/MentalPong locally (as a sibling directory or a read-only git reference — NOT inside this repo). **Satisfied (2026-04-25)** by the Zenodo release at `~/Downloads/MentalPong/`, which bundles both `code/` (jazlab/MentalPong source — `phys_utils.py`, `generic_plot_utils.py`, `rnn_comparisons_2021.py`, etc.) and `data/`. No separate `git clone` needed for a class project. Inspection subtasks:
   - [x] What hidden-unit values did Rajalingham actually sweep? **10, 20** (Zenodo release; 40 not present) — corrected in PLANNING.md (2026-04-25).
   - [x] What format is the Zenodo release in? **Python pickle (.pkl)** — full schema documented in SCRATCHPAD.md (2026-04-22).
   - [x] Do they release per-RNN Fig. 5B curves, or only aggregated traces? **Per-RNN individual curves released** in `offline_rnn_neural_responses_reliable_50.pkl` — file structure in SCRATCHPAD.md.
   - [x] What exactly do their RNNs receive as input? **100-dim Gabor + PCA features** (not raw pixels) — documented in SCRATCHPAD.md.
-- [ ] Download the Rajalingham Zenodo release into `data/dmfc/`. Write a one-paragraph README in that directory documenting what was downloaded and from where.
-- [ ] Resolve the four open architectural questions listed in PLANNING.md; update PLANNING or promote any remaining ambiguities into explicit tasks in later milestones.
+- [x] Download the Rajalingham Zenodo release into `data/dmfc/`. Write a one-paragraph README in that directory documenting what was downloaded and from where. (2026-04-25; release lives at `~/Downloads/MentalPong/`; `data/dmfc` symlinks to its `data/` subdir; provenance + recreate-on-other-machine instructions in `data/README.md`)
+- [x] Resolve the four open architectural questions listed in PLANNING.md; update PLANNING or promote any remaining ambiguities into explicit tasks in later milestones. **All four resolved (2026-04-25)**:
   - [x] Zenodo release format → .pkl; schema documented in SCRATCHPAD.md.
   - [x] Per-RNN Fig. 5B curves available? → Yes; structure documented in SCRATCHPAD.md.
   - [x] Hidden-unit sweep values → 10, 20 (corrected from earlier wrong note of 40); updated in PLANNING.md experimental matrix (2026-04-25).
   - [x] Wall reflection — graph edge or env-level? **Resolved**: env-level; y = ±10° walls confirmed from Zenodo plotting code (2026-04-24).
-- [ ] Write a minimal `tests/test_smoke.py` that imports every `dmfc.*` subpackage and asserts they load. Run `pytest` to confirm the testing infrastructure works.
+- [x] Write a minimal `tests/test_smoke.py` that imports every `dmfc.*` subpackage and asserts they load. Run `pytest` to confirm the testing infrastructure works. (2026-04-25; 7 tests pass; `ruff check` + `ruff format --check` clean)
 
 ## Milestone 2 — Mental Pong environment
 
@@ -102,3 +102,5 @@ Ideas worth considering later; not committed to the milestones above.
 
 Move tasks here as they're finished, with a date.
 Example format: `- [x] Set up repo scaffolding (2026-04-21)`
+
+- [x] **Milestone 1 — Scaffolding and information gathering** complete (2026-04-25). All sub-tasks `[x]` above. Repo ready for Milestone 2: `dmfc/` skeleton in place, deps installed via `uv` (`uv.lock` tracked, 50 packages, torch 2.4.1 / numpy 1.26.4 / Python 3.11.15), `data/dmfc` symlinked to the local Zenodo download, `tests/test_smoke.py` green (7 passed), `ruff` clean.

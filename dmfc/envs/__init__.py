@@ -1,0 +1,1 @@
+"""Mental Pong task environment."""
