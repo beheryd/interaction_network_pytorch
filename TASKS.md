@@ -13,7 +13,7 @@ Goal: everything needed to start real work exists — repo structure, pinned dep
 - [ ] Create `.claude/commands/freshstart.md` and `.claude/commands/summcommit.md` (copied verbatim from project-bootstrap skill — already done by the bootstrap run).
 - [ ] Verify upstream higgsfield IN code runs out of the box: identify entry points, run any existing demo, confirm what hidden-state extraction hooks exist. Log findings in SCRATCHPAD.
 - [ ] Clone jazlab/MentalPong locally (as a sibling directory or a read-only git reference — NOT inside this repo). Inspect:
-  - [x] What hidden-unit values did Rajalingham actually sweep? **10, 20, 40** — recorded in PLANNING.md (2026-04-22).
+  - [x] What hidden-unit values did Rajalingham actually sweep? **10, 20** (Zenodo release; 40 not present) — corrected in PLANNING.md (2026-04-25).
   - [x] What format is the Zenodo release in? **Python pickle (.pkl)** — full schema documented in SCRATCHPAD.md (2026-04-22).
   - [x] Do they release per-RNN Fig. 5B curves, or only aggregated traces? **Per-RNN individual curves released** in `offline_rnn_neural_responses_reliable_50.pkl` — file structure in SCRATCHPAD.md.
   - [x] What exactly do their RNNs receive as input? **100-dim Gabor + PCA features** (not raw pixels) — documented in SCRATCHPAD.md.
@@ -21,8 +21,8 @@ Goal: everything needed to start real work exists — repo structure, pinned dep
 - [ ] Resolve the four open architectural questions listed in PLANNING.md; update PLANNING or promote any remaining ambiguities into explicit tasks in later milestones.
   - [x] Zenodo release format → .pkl; schema documented in SCRATCHPAD.md.
   - [x] Per-RNN Fig. 5B curves available? → Yes; structure documented in SCRATCHPAD.md.
-  - [x] Hidden-unit sweep values → 10, 20, 40; updated in PLANNING.md experimental matrix.
-  - [ ] Wall reflection — graph edge or env-level? Still open; default to env-level per PLANNING decision.
+  - [x] Hidden-unit sweep values → 10, 20 (corrected from earlier wrong note of 40); updated in PLANNING.md experimental matrix (2026-04-25).
+  - [x] Wall reflection — graph edge or env-level? **Resolved**: env-level; y = ±10° walls confirmed from Zenodo plotting code (2026-04-24).
 - [ ] Write a minimal `tests/test_smoke.py` that imports every `dmfc.*` subpackage and asserts they load. Run `pytest` to confirm the testing infrastructure works.
 
 ## Milestone 2 — Mental Pong environment
@@ -40,19 +40,18 @@ Goal: a deterministic, seed-controlled, unit-tested Mental Pong env that reprodu
 
 Goal: one IN and one flat-RNN pipeline baseline train end-to-end, produce valid run artifacts, and their hidden states can be extracted for analysis. No full sweep yet.
 
-- [ ] Flat-RNN baseline (`dmfc/models/flat_rnn.py`): wraps `torch.nn.GRU` or `torch.nn.RNN` with a linear readout. This is the internal sanity check against Rajalingham's published numbers, not a claim-bearing model.
-- [ ] IN model (`dmfc/models/interaction_network.py`): either (a) subclass the upstream higgsfield IN with a hidden-state extraction hook, or (b) copy the upstream file into `dmfc/models/` and add the hook there, with a comment naming the origin. Must expose `forward(obs_seq) → (hidden_states, outputs)`.
+- [ ] IN model (`dmfc/models/interaction_network.py`): subclass the upstream higgsfield `InteractionNetwork` and override `forward()` to return `(predicted, effect_receivers)` where `effect_receivers` shape is `[batch, n_objects, effect_dim]`. This is the per-object relational state used for DMFC comparison. Do NOT edit the upstream file. (Flat-RNN baseline cut — timeline.)
 - [ ] Object-graph construction for Mental Pong IN: define the object set (ball, paddle) and the relations (ball↔paddle). Walls are handled inside the env per PLANNING decision 3; revisit only if needed for the ablation.
 - [ ] Loss-variant system (`dmfc/training/losses.py`): the four Rajalingham variants as loss-mask configs over model outputs. One implementation, four configs.
 - [ ] Training loop (`dmfc/training/train.py`): config-driven, seed-driven, writes the full run artifact (config, git hash, seed, checkpoint, curves, stdout/stderr) to `runs/<ts>-<hash>/` per CONSTITUTION.
 - [ ] Hidden-state serialization: at end of training, run one forward pass over all 79 eval conditions and save hidden states to `runs/<...>/hidden_states.npz` for later CPU-only analysis.
 - [ ] Config files: one YAML per loss variant × a baseline hidden-unit count in `configs/`. Full sweep comes in Milestone 5.
-- [ ] Pilot training runs: train one flat-RNN and one IN on the `Vis&Occ` loss variant, seed 0, single hidden-unit value. Confirm they converge, produce valid artifacts, and hidden states can be loaded.
+- [ ] Pilot training run: train one IN on the `Vis&Occ` loss variant (`sim-mov`), seed 0, n_hidden=10. Confirm it converges, produces valid artifacts, and hidden states can be loaded.
 - [ ] `tests/test_training.py`: verify the run-artifact writer produces all required files and that seed determinism actually works (same seed + config → same final checkpoint hash).
 
 ## Milestone 4 — Analysis pipeline (Fig. 5B primary, Fig. 4 secondary)
 
-Goal: all four analysis metrics from PRD A6 work end-to-end on the pilot IN + flat-RNN runs, and the reproduce_fig5b / reproduce_fig4 scripts regenerate extended figures.
+Goal: all four analysis metrics from PRD A6 work end-to-end on the pilot IN runs, and the reproduce_fig5b / reproduce_fig4 scripts regenerate extended figures.
 
 - [ ] `dmfc/rajalingham/load.py`: adapter for loading the DMFC population data and the published RNN outputs from the Zenodo release. Decoupled from everything else; if the format changes, only this file breaks.
 - [ ] `dmfc/analysis/endpoint_decoding.py` (PRIMARY — Fig. 5B metric): time-resolved linear decoding of endpoint ball_y from hidden states. Cross-validated across conditions. Returns Pearson r and RMSE vectors over time matching the 0–1200 ms axis of Fig. 5B.
@@ -67,7 +66,7 @@ Goal: all four analysis metrics from PRD A6 work end-to-end on the pilot IN + fl
 
 Goal: all IN training runs complete, primary Fig. 5B result is known, secondary Fig. 4 result is known.
 
-- [ ] Generate config files for the full experimental matrix: 4 loss variants × Rajalingham's hidden-unit sweep values × 5 seeds. Estimated 60–100 runs per the matrix in PLANNING.
+- [ ] Generate config files for the full experimental matrix: 4 loss variants × n_hidden {10, 20} × 5 seeds = 40 runs per PLANNING.
 - [ ] Execute the sweep. Log progress in SCRATCHPAD; flag any runs that don't converge or produce invalid artifacts.
 - [ ] Regenerate Fig. 5B and Fig. 4 with the full IN sweep. Commit the figures + the list of consumed run directories.
 - [ ] Statistical tests:

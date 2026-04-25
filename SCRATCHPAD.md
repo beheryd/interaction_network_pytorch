@@ -41,20 +41,55 @@ res_rnn['df']                                        # DataFrame, 192 rows × 69
 
 This means our Fig. 5B comparison can use per-RNN individual curves, not just mean±SEM.
 
-### [x] Hidden-unit sweep values
+### [x] Hidden-unit sweep values — CORRECTED (2026-04-24)
 
-**Exactly 3 values: 10, 20, 40 hidden units.** Update PLANNING.md experimental matrix.
+**CORRECTION**: Earlier note said "Exactly 3 values: 10, 20, 40" — this was wrong.
+Actual: `res['df']['n_hidden'].unique()` = `[10.0, 20.0]` — **only 2 hidden sizes in the Zenodo release**.
 
-192 models = 3 hidden sizes × 4 loss types × 16 seeds.
+Corrected 192-model breakdown:
+- **4 loss types × 2 architectures (GRU, LSTM) × 2 n_hidden (10, 20) × 2 input types (gabor_pca, pixel_pca) × 6 seeds = 192**
+- For our neural comparison, the `gabor_pca` subset (96 models) is the relevant reference.
+- PLANNING.md experimental matrix has been updated accordingly.
 
 ### [x] RNN architecture
 
-- **Type**: GRU or LSTM (both present in release)
-- **Input dim**: 100 (Gabor-filtered visual frames → PCA → 100D)
+- **Type**: GRU and LSTM (both present in release)
+- **Input dim**: 100 (Gabor-filtered visual frames → PCA → 100D for `gabor_pca` models;
+  pixel features → PCA for `pixel_pca` models)
 - **Output dim**: 7 (indices 0–1 vis-sim, 2–3 vis, 4–5 sim, 6 final position)
-- **Loss types in data**: `vis-sim`, `vis`, `sim`, `mov`
-  - These map to Rajalingham's four classes (Intercept=sim, Vis=vis, Vis+Occ=vis-sim, Vis&Occ=mov)
-  - Verify exact mapping against paper before training IN.
+- **Input types in data**: `gabor_pca` (relevant for neural comparison), `pixel_pca`
+
+### [x] Loss-type label mapping — CORRECTED (2026-04-24)
+
+**CORRECTION**: Earlier note proposed `vis-sim`→Intercept etc. — this was wrong.
+
+Actual `loss_weight_type` values confirmed from `res['df']['loss_weight_type'].unique()`:
+
+```
+['mov', 'sim-mov', 'vis-mov', 'vis-sim-mov']
+```
+
+All 4 types include `mov` (final-position supervision); variants add supervision on visible/occluded:
+
+| loss_weight_type | What is supervised | Rajalingham class |
+|---|---|---|
+| `mov` | final position only (output index 6) | **Intercept** |
+| `vis-mov` | visible epoch (indices [2,3]) + final | **Vis** |
+| `vis-sim-mov` | vis+occ jointly (indices [0,1]) + final | **Vis+Occ** |
+| `sim-mov` | occluded epoch (indices [4,5]) + final | **Vis&Occ** |
+
+Mapping inferred from `rnn_comparisons_2021.py` plot order `['mov','vis-mov','vis-sim-mov','sim-mov']`
+matching Fig. 4 left→right (Intercept, Vis, Vis+Occ, Vis&Occ). Verify from paper supplementary
+before IN training begins.
+
+For our IN configs, the 4 loss variants supervise:
+
+| IN config | Supervised outputs | Output indices |
+|---|---|---|
+| `in_intercept` | final position only | [6] |
+| `in_vis` | visible epoch + final | [2,3] + [6] |
+| `in_vis_occ` | vis+occ joint + final | [0,1] + [6] |
+| `in_vis_and_occ` | occluded epoch + final | [4,5] + [6] |
 
 ### [x] RNN input — NOT raw pixels
 
@@ -69,7 +104,7 @@ for our input-spec decision (PRD NG3 / A3):
 
 TASKS.md Milestone 2 says "16.7 ms/step". **This is wrong.** Actual specs:
 - **Neural data**: 50 ms bins, 100 timepoints per trial → ~5 s total
-- **RNN timestep**: ~41 ms/step, 90 timesteps → ~3.7 s total
+- **RNN timestep**: ~41 ms/step (confirmed: `scaling_factor = 41` in phys_utils.py), 90 timesteps → ~3.7 s total
 - The 16.7 ms figure may come from the monitor refresh rate, not the analysis timestep.
 
 **For our IN training**: use 50 ms bins to match the neural data (analysis compares hidden states
@@ -121,14 +156,43 @@ dataset = {
 }
 ```
 
-### [x] Does upstream higgsfield code expose hidden states?
+### [x] Does upstream higgsfield code expose hidden states? (2026-04-24)
 
-Not yet inspected directly. From `Interaction Network.ipynb` — it's a Jupyter notebook.
-Next step: read it to determine if hidden-state extraction exists or needs to be added in a subclass.
+**Confirmed by reading `Interaction Network.ipynb`**: `InteractionNetwork.forward()` returns only
+`predicted` (shape `[batch*n_objects, 2]` = next-state speedX/Y). No intermediate states exposed.
+
+Internal tensors available for subclassing:
+- `effects`: `[batch, n_relations, effect_dim]` — raw relational effects from RelationalModel
+- `effect_receivers`: `[batch, n_objects, effect_dim]` — effects aggregated per object ← **use this**
+
+**Action for Milestone 3**: subclass `InteractionNetwork` in `dmfc/models/interaction_network.py`.
+Override `forward()` to return `(predicted, effect_receivers)`. Do NOT edit the upstream file.
+`effect_receivers` is the per-object relational state analogous to the RNN hidden state for DMFC
+comparison.
+
+### [x] Wall geometry (2026-04-24)
+
+Confirmed from `add_mpong_frame_to_axis()` in `code/utils/generic_plot_utils.py`:
+
+```python
+ax.plot([-10, 10, 10, -10, -10], [10, 10, -10, -10, 10], 'k-', lw=2)  # arena
+ax.plot([5, 5], [-10, 10], 'k-', lw=1)                                 # paddle at x=5
+```
+
+- **Arena**: x ∈ [-10, 10]°, y ∈ [-10, 10]°
+- **Ball reflects off y = ±10°** walls
+- **Paddle at x = 5°** (right of center)
+- Ball travels left→right: x₀ ∈ [-8, 0]°, dx₀ > 0
+
+Wall reflection is handled env-level (ball velocity flipped on collision with y = ±10). This is the
+default per PLANNING.md decision. Walls are NOT graph edges in the IN by default.
+
+### [x] GRU vs LSTM for flat-RNN baseline — MOOT (flat-RNN cut)
+
+Rajalingham used both GRU and LSTM (192 = 4×2×2×2×6). **Flat-RNN baseline is cut from scope
+per project timeline.** Only Interaction Networks will be trained. The analysis pipeline compares
+IN hidden states directly against Rajalingham's released RNN outputs.
 
 ### Open problems
 
-- [ ] Verify exact loss-type label mapping: `vis-sim`/`vis`/`sim`/`mov` → Intercept/Vis/Vis+Occ/Vis&Occ
-- [ ] Inspect `Interaction Network.ipynb` for hidden-state API
-- [ ] Decide whether to use GRU or LSTM for the flat-RNN baseline (or both)
-- [ ] Confirm wall geometry from the condition metadata (what are the y-bounds for reflections?)
+(all resolved as of 2026-04-24)

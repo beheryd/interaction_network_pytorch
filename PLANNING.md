@@ -99,10 +99,12 @@ The full IN training sweep, to be run in Milestone 3:
 | Axis | Values | Count |
 |---|---|---|
 | Loss variant | Intercept, Vis, Vis+Occ, Vis&Occ | 4 |
-| Hidden-unit count | 10, 20, 40 (exact values from Rajalingham's sweep — confirmed Milestone 1) | 3 |
+| Hidden-unit count | 10, 20 (values present in Rajalingham's Zenodo release — confirmed 2026-04-24) | 2 |
 | Seed | 0, 1, 2, 3, 4 (min 5 per CONSTITUTION) | 5 |
 
-Estimated total: **60 training runs** (4 × 3 × 5). At ~4 hr/run on a single GPU (NF3 ceiling), serial wall-clock would be ~10 days. With cluster access and parallel job submission (SLURM array jobs), the full sweep can complete in a few hours of wall-clock if 60 GPUs are available simultaneously, or ~1–2 days with a smaller allocation.
+Estimated total: **40 training runs** (4 × 2 × 5). At ~4 hr/run on a single GPU (NF3 ceiling), serial wall-clock would be ~7 days. With cluster access and parallel job submission (SLURM array jobs), the full sweep can complete in a few hours of wall-clock if 40 GPUs are available simultaneously.
+
+Note: flat-RNN baseline is cut from scope per project timeline constraints. Only INs are trained.
 
 ## Environment / setup
 
@@ -136,5 +138,5 @@ python -m dmfc.envs.mental_pong --render --seed 0
 
 - [ ] **What format is Rajalingham's Zenodo release actually in?** (Source Data files per paper; need to inspect — Milestone 1 task.) Determines the adapter implementation in `dmfc/rajalingham/`.
 - [ ] **Can we extract their per-RNN Fig. 5B curves from their repo/data release, or do we only have the mean±SEM traces from the published figure?** If only the latter, the IN vs. RNN comparison on Fig. 5B uses their aggregated traces rather than individual-RNN curves — statistically weaker but still interpretable.
-- [ ] **Does the upstream `higgsfield/interaction_network_pytorch` expose hidden states cleanly?** If not, the subclass in `dmfc/models/` needs a hook for extracting them at each timestep. Check in Milestone 2.
-- [ ] **Wall reflection — a graph edge or an env-level state update?** If wall-ball collisions are handled inside the env (ball's velocity is flipped on collision), the IN doesn't need to learn reflection physics — just track the resulting trajectory. If walls are graph edges the IN must learn to use, it's closer to the "full relational physics" story but harder to train. Default: env handles reflection; walls included as graph context only for the ablation. Revisit if this turns out to matter scientifically.
+- [x] **Does the upstream `higgsfield/interaction_network_pytorch` expose hidden states cleanly?** No — `forward()` only returns `predicted`. Subclass in `dmfc/models/interaction_network.py` must override `forward()` to also return `effect_receivers` (shape `[batch, n_objects, effect_dim]`), the per-object aggregated relational state. This is the hidden state for DMFC comparison.
+- [x] **Wall reflection — a graph edge or an env-level state update?** Confirmed env-level: arena is x ∈ [-10,10]°, y ∈ [-10,10]°; ball velocity is flipped on collision with y = ±10° walls inside the env. IN does not need to learn reflection physics. Walls are NOT graph edges by default; revisit only for the ablation.
