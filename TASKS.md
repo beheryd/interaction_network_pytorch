@@ -29,12 +29,12 @@ Goal: everything needed to start real work exists — repo structure, pinned dep
 
 Goal: a deterministic, seed-controlled, unit-tested Mental Pong env that reproduces Rajalingham's 79 eval conditions and whose trajectories match their spec exactly.
 
-- [ ] Implement `dmfc/envs/mental_pong.py`: Gym-style env with `reset(seed, condition_id)`, `step(action)`, `render()`. Ball kinematics: rightward motion only, constant speed, reflections off horizontal walls, deterministic given seed.
-- [ ] Encode the visible/occluded epoch logic per Rajalingham's spec (visible/occluded epoch lengths vary by condition; epoch masks stored in `valid_meta_sample_full.pkl`; use **50 ms bins** matching the neural data, not 16.7 ms; bounces ∈ {0, 1}).
-- [ ] Load or construct the 79 eval conditions. If the Zenodo release contains them: parse and cache. If not: construct by sampling the parameter ranges Rajalingham described (`x0 ∈ [-8, 0]°`, `y0 ∈ [-10, 10]°`, `dx0 ∈ [6.25, 18.75]°/s`, `dy0 ∈ [-18.75, 18.75]°/s`) subject to the constraints.
-- [ ] `tests/test_mental_pong.py`: unit tests against hand-computed expected trajectories for at least 3 fixed seeds. Cover: (a) no-bounce condition, (b) one-bounce condition, (c) occluder timing, (d) interception geometry at trial end.
-- [ ] CLI: `python -m dmfc.envs.mental_pong --render --seed 0 --condition 0` renders a single condition for visual inspection (PRD F1).
-- [ ] Write `dmfc/envs/conditions.py` with a function returning the canonical 79-condition evaluation set, frozen by a seed+index mapping.
+- [x] Implement `dmfc/envs/mental_pong.py`: Gym-style env with `reset(seed, condition_id)`, `step(action)`, `render()`. Ball kinematics: rightward motion only, constant speed, reflections off horizontal walls, deterministic given seed. (2026-04-25)
+- [x] Encode the visible/occluded epoch logic per Rajalingham's spec (visible/occluded epoch lengths vary by condition; ball masked when ball_x ≥ 5°; trajectory integrated at 41 ms native step, observations resampled to 50 ms bins to match neural data; bounces ∈ {0, 1}). (2026-04-25)
+- [x] Load the 79 eval conditions from `valid_meta_sample_full.pkl` via `dmfc/envs/conditions.py` — preserves Rajalingham's `PONG_BASIC_META_IDX` order and reads MWK-frame columns directly (no re-derivation needed). (2026-04-25)
+- [x] `tests/test_mental_pong.py`: 9 tests covering determinism, endpoint oracles for all 79 conditions (`y_occ_rnn_mwk` and `y_f_rnn_mwk` matched to ~1e-14), no-bounce, one-bounce, occluder timing, mask integrity, interception geometry, paddle invariants, and occluder-x consistency. All passing. (2026-04-25)
+- [x] CLI: `python -m dmfc.envs.mental_pong --render --seed 0 --condition 0` renders a single condition; also `--animate` (GIF, real-time) and `--grid` (all 79 trajectories in one PNG) for visual inspection. Usage commands documented in SCRATCHPAD.md. (2026-04-25)
+- [x] Write `dmfc/envs/conditions.py` with `load_conditions()` returning the canonical 79-condition `ConditionSpec` list (meta_index, x0, y0, dx, dy, t_f_steps, t_occ_steps, y_occ_oracle, y_f_oracle, n_bounce). Frozen by `PONG_BASIC_META_IDX` ordering. (2026-04-25)
 
 ## Milestone 3 — Models, training infrastructure, pilot runs
 
@@ -104,3 +104,4 @@ Move tasks here as they're finished, with a date.
 Example format: `- [x] Set up repo scaffolding (2026-04-21)`
 
 - [x] **Milestone 1 — Scaffolding and information gathering** complete (2026-04-25). All sub-tasks `[x]` above. Repo ready for Milestone 2: `dmfc/` skeleton in place, deps installed via `uv` (`uv.lock` tracked, 50 packages, torch 2.4.1 / numpy 1.26.4 / Python 3.11.15), `data/dmfc` symlinked to the local Zenodo download, `tests/test_smoke.py` green (7 passed), `ruff` clean.
+- [x] **Milestone 2 — Mental Pong environment** complete (2026-04-25). Deterministic env reproduces all 79 conditions to ~1e-14 against Zenodo endpoint oracles (`y_occ_rnn_mwk`, `y_f_rnn_mwk`). 16/16 tests green; `ruff` + `mypy` clean. Two material corrections to Milestone-1 documentation landed alongside: paddle is at x=+10° (right wall), occluder spans x ∈ [+5°, +10°]; ball reflects at y=±9.6° (not ±10°) — the latter discovered by integrator validation against the metadata. Repo ready for Milestone 3.

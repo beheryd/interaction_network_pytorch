@@ -170,19 +170,24 @@ Override `forward()` to return `(predicted, effect_receivers)`. Do NOT edit the 
 `effect_receivers` is the per-object relational state analogous to the RNN hidden state for DMFC
 comparison.
 
-### [x] Wall geometry (2026-04-24)
+### [x] Wall geometry (2026-04-24; paddle/occluder identity corrected 2026-04-25)
 
 Confirmed from `add_mpong_frame_to_axis()` in `code/utils/generic_plot_utils.py`:
 
 ```python
 ax.plot([-10, 10, 10, -10, -10], [10, 10, -10, -10, 10], 'k-', lw=2)  # arena
-ax.plot([5, 5], [-10, 10], 'k-', lw=1)                                 # paddle at x=5
+ax.plot([5, 5], [-10, 10], 'k-', lw=1)                                 # OCCLUDER LEFT EDGE
 ```
 
-- **Arena**: x ∈ [-10, 10]°, y ∈ [-10, 10]°
-- **Ball reflects off y = ±10°** walls
-- **Paddle at x = 5°** (right of center)
+- **Arena (visible frame)**: x ∈ [-10, 10]°, y ∈ [-10, 10]°
+- **Ball reflects off y = ±9.6°** (NOT y = ±10°). Discovered 2026-04-25: integrating with y=±10° walls produces a 0.8° post-bounce error in all 27 of 27 one-bounce conditions; integrating with y=±9.6° matches `y_occ_rnn_mwk` and `y_f_rnn_mwk` for all 79 conditions to ~1e-14. Plausibly accounts for the rendered ball's finite extent (paper draws the ball as 0.5° x 0.5°). The visible-arena edge is still y=±10°; only the ball-center reflection threshold is inset.
+- **Paddle at x = +10°** (right wall, full vertical span). Paper Methods: paddle "rendered in the central vertical position at the right edge of the screen"; the 20° frame puts the right edge at x=+10°.
+- **Occluder spans x ∈ [+5°, +10°]**. The vertical line at x=5° in `add_mpong_frame_to_axis` is the occluder's left edge, NOT the paddle.
 - Ball travels left→right: x₀ ∈ [-8, 0]°, dx₀ > 0
+
+Verified against `valid_meta_sample_full.pkl` (loaded live 2026-04-25): per-condition `x_occ_*_mwk ≈ 5°` (ball x when entering occluder), `x_f_*_mwk ≈ 10°` (ball x at trial end / interception line).
+
+**Correction note**: Earlier 2026-04-24 entries called the x=5° line the paddle. That was a misread of the plotting code — `generic_plot_utils.py` has no separate paddle marker; the paddle is implicit in the right wall.
 
 Wall reflection is handled env-level (ball velocity flipped on collision with y = ±10). This is the
 default per PLANNING.md decision. Walls are NOT graph edges in the IN by default.
@@ -227,3 +232,70 @@ Closed out the four remaining Milestone 1 items in one pass after confirming the
 ### Carry-forward note for Milestone 3
 
 Upstream `Interaction Network.ipynb` has not been re-executed under torch 2.4. The read-through that documented `effect_receivers` as the per-object hidden state stands, but we'll find out in Milestone 3 whether the actual upstream `InteractionNetwork` class instantiates and runs unmodified. If it doesn't, copy `Physics_Engine.py` (or whichever upstream file breaks) into `dmfc/models/` with an upstream-origin comment and patch the copy.
+
+## Milestone 2 closeout — Mental Pong environment (2026-04-25)
+
+Built a deterministic Gym-style env that reproduces Rajalingham's 79-condition stimulus set exactly. Headline result: integrated trajectories match `y_occ_rnn_mwk` and `y_f_rnn_mwk` for all 79 conditions to ~1e-14.
+
+### What got built
+
+- `dmfc/envs/conditions.py` — `load_conditions()` adapter over `valid_meta_sample_full.pkl`. Returns 79 `ConditionSpec` dataclasses (frozen) in `PONG_BASIC_META_IDX` order. Reads MWK-frame columns (`x0_mwk`, `y0_mwk`, `dx_rnn`, `dy_rnn`, `t_f`, `t_occ`, `y_occ_rnn_mwk`, `y_f_rnn_mwk`, `n_bounce_correct`) — no re-derivation of kinematics needed.
+- `dmfc/envs/mental_pong.py` — `MentalPongEnv` Gym-style class with `reset/step/render`, plus `integrate_trajectory` and module-level helpers for resampling and masking. Trajectory is integrated at 41 ms (Zenodo native), observations exposed at 50 ms bins (neural-data binning). Ball state is zeroed and `visible_flag=0` when `ball_x ≥ 5°`. Paddle is one of two object nodes per the IN graph design; held at y=0 in the smoke render until a controller exists.
+- `tests/test_mental_pong.py` — 9 tests. The endpoint-oracle test sweeps all 79 conditions; if it goes red the integrator is wrong, do not move on.
+- CLI extensions: `--render` (static PNG), `--animate` (real-time GIF), `--grid` (all 79 trajectories in one PNG, 9×9 layout, blue=no-bounce, red=one-bounce).
+
+### Two corrections to Milestone-1 docs landed in this pass
+
+Both turned out to be misreads from the earlier read-through-only inspection; verified live against `valid_meta_sample_full.pkl`. Both are now consistent across SCRATCHPAD.md, PLANNING.md, and the code.
+
+1. **Paddle is at x=+10°, not x=+5°.** The vertical line at x=5° in `add_mpong_frame_to_axis` is the occluder's left edge, not the paddle. Verified: per-condition `x_occ_*_mwk ≈ 5°` (ball entering occluder), `x_f_*_mwk ≈ 10°` (ball at trial end). Paper Methods unambiguously place the paddle "at the right edge of the screen" — the 20° frame puts that at x=+10°.
+2. **Ball reflects off y=±9.6°, not y=±10°.** Discovered by validating the integrator: y=±10° walls produce a 0.8° post-bounce error in all 27/27 one-bounce conditions, while y=±9.6° matches all 79 endpoint oracles to ~1e-14. Plausibly accounts for the ball's finite extent (0.5°-square sprite) vs. the wall edge. The visible arena box is still ±10°; only the ball-center reflection threshold is inset.
+
+### Two design decisions confirmed with the user before coding
+
+- **Trajectory source**: integrate kinematics ourselves (true Gym simulator) rather than replay pre-binned trajectories from `behavioral_responses`. Lets us run ablations and OOD tests later; validated by matching all 79 endpoint oracles.
+- **Occluded-epoch input**: `visible_flag=0` and ball_x/ball_y/ball_dx/ball_dy zeroed (not last-seen-position frozen). Faithful analog of the paper's RNN setup, where Gabor frames literally hide the ball during occlusion. This is what makes the simulation-vs-no-simulation comparison meaningful.
+- **Paddle in IN graph**: included as an object node with a ball↔paddle relation. Matches the IN's object-relational philosophy; the alternative ("ball-only graph, paddle as decoded output") would leave the graph with one node and zero relations.
+
+### Carry-forward note for Milestone 3
+
+The paddle currently has no controller — `step(action)` accepts a target-y but the smoke CLI passes `0.0` every tick. When an IN policy or training loop arrives in Milestone 3, the paddle dynamics in the env (`MAX_PADDLE_SPEED_DEG_PER_MS = 0.01` per the paper) become live. No changes to the env API expected.
+
+## How to visualize the Mental Pong stimulus
+
+The env CLI (`python -m dmfc.envs.mental_pong`) supports three visualization modes. Run these from the repo root after activating the venv:
+
+```bash
+# activate the venv (once per terminal)
+source .venv/bin/activate
+
+# create the output dir (gitignored — figures are regenerable from scripts)
+mkdir -p figures
+
+# 1. Static PNG of all 79 trajectories in a 9x9 grid
+#    Blue = no-bounce (52), red = one-bounce (27). Green dot = start, black = end.
+python -m dmfc.envs.mental_pong --grid --out figures/all_79.png
+open figures/all_79.png
+
+# 2. Animated GIF of one condition (real time, 20 fps)
+#    Conditions are indexed 0..78. Condition 0 is no-bounce; condition 1 is one-bounce.
+python -m dmfc.envs.mental_pong --animate --condition 1 --out figures/cond1.gif
+open figures/cond1.gif
+
+# 3. Static PNG of one condition with full trajectory + endpoint oracles drawn
+python -m dmfc.envs.mental_pong --render --condition 1 --out figures/cond1.png
+open figures/cond1.png
+```
+
+Notes:
+- `open` is the macOS command; on Linux use `xdg-open`.
+- If you don't want to activate the venv, prefix with the venv's python directly: `.venv/bin/python -m dmfc.envs.mental_pong --grid --out figures/all_79.png`.
+- `--fps N` on `--animate` plays the GIF faster than real time (default 20 fps = real time at 50 ms bins).
+- Loop a few conditions:
+  ```bash
+  for i in 0 1 14 17 22; do
+      python -m dmfc.envs.mental_pong --animate --condition $i --out figures/cond_$i.gif
+  done
+  ```
+
+The paddle in the GIFs is held at y=0 (action=0 every step) — placeholder until a controller is wired up in Milestone 3.

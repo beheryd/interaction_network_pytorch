@@ -4,7 +4,9 @@
 # Project artifacts (per CONSTITUTION reproducibility + neural-data-handling rules)
 runs/
 data/dmfc
+figures/
 *.pt
+*.pdf
 
 # Python
 .venv/
