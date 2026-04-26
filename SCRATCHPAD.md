@@ -299,3 +299,64 @@ Notes:
   ```
 
 The paddle in the GIFs is held at y=0 (action=0 every step) — placeholder until a controller is wired up in Milestone 3.
+
+## Milestone 3 closeout — IN training infrastructure + pilot (2026-04-26)
+
+End-to-end training loop running on CPU. Pilot (`sim-mov`, seed 0, `effect_dim=10`, 50K steps) trained to loss 0.05 EMA in ~13 min and produced a clean run artifact. The bones of the IN-Mental-Pong stack are solid; the two real surprises were architectural and are documented below.
+
+### What got built
+
+- `dmfc/models/_upstream_in.py` — vendored copy of upstream `RelationalModel`, `ObjectModel`, `InteractionNetwork` from `Interaction Network.ipynb` (cells 10/12/14). Modernized for torch 2.4 (`Variable(...)` removed; `forward` now returns `(predicted, effect_receivers)`). No mathematical changes to this file — it's a faithful upstream reference per CONSTITUTION fork discipline.
+- `dmfc/models/interaction_network.py` — `MentalPongIN(nn.Module)`. 2 objects (ball, paddle), 2 directed relations (ball→paddle, paddle→ball). Per-step object features `(x, y, dx, dy, visible, is_ball, is_paddle)` are concatenated with the previous step's `effect_receivers` for that object → relational message passing → 7-d output head reads from concatenated effect_receivers. Recurrence is the prior-effect concat; `effect_receivers` is the published "hidden state" the M4 pipeline will consume.
+- `dmfc/envs/random_conditions.py` — `sample_random_condition(rng)` and `sample_batch(...)`. Samples `(x0, y0, speed, heading)` from the 79's empirical envelope, integrates via `mental_pong.integrate_trajectory`, rejects `n_bounce > 1` and out-of-envelope `t_f_steps`. Returns `ConditionSpec` with `meta_index = -1`. The training loop builds infinite stream from this generator; the canonical 79 are held out for eval.
+- `dmfc/training/losses.py` — `compute_loss(outputs, targets, variant, visible_mask, valid_mask)`. One implementation, four variants:
+  - `mov` (Intercept): supervise output[6] every valid step.
+  - `vis-mov` (Vis): output[2,3] visible-and-valid + output[6] every valid.
+  - `vis-sim-mov` (Vis+Occ): output[0,1] every valid + output[6] every valid.
+  - `sim-mov` (Vis&Occ): output[4,5] occluded-and-valid + output[6] every valid.
+- `dmfc/training/config.py` — typed `RunConfig` dataclass + `load_config`/`dump_config` over YAML.
+- `dmfc/training/train.py` — argparse → seed everything → make `runs/in_<variant>_h<eff>_s<seed>_<ts>_<git>/` → log to file + stdout → train (random conditions per step, gradient clipping) → final checkpoint → forward over the 79 → `hidden_states.npz`.
+- `configs/in_{intercept,vis,vis_occ,vis_and_occ}.yaml` — one per loss variant. All start at `effect_dim=10`, lr=1e-3, batch=32, max_steps=50000.
+- Tests: `tests/test_random_conditions.py`, `tests/test_losses.py`, `tests/test_training.py`. 17 new tests; total now 33/33.
+
+### Two design deviations that landed mid-milestone
+
+**1. Final ReLU dropped from the relational MLP.** First pilot loss plateaued at ~25 (= variance of mean-zero targets) and `effect_receivers std = 0.0000` everywhere. Probe showed 100% of pre-final-ReLU activations in the upstream `RelationalModel` were negative — the ReLU was clipping every effect to zero, so the IN was a constant-output model whose only learnable signal was the bias on the 7-d output head. Fix: build a local `_RelationalMLP` in the wrapper without the final ReLU. The vendored upstream copy stays untouched per CONSTITUTION.
+
+The upstream notebook gets away with the final ReLU because its solar-system task's next-velocity targets happen to be in a regime where positive effects suffice. For Mental Pong the relational state must encode signed offsets (paddle above vs. below ball, etc.), so a non-negative effect vector is structurally inadequate.
+
+**2. Gradient clipping at norm 1.0.** Second pilot trained beautifully to step ~10K (loss 4.4) then catastrophically diverged: by step 25K loss was 6.7e30 and effect_receivers std was 5e15. Cause: the recurrent loop where `prev_effect_receivers` is concatenated into next-step object features has no fixed point with a linear final layer — any positive Lyapunov component compounds. Fix: `torch.nn.utils.clip_grad_norm_` at 1.0 in `train.py` (constant `GRAD_CLIP_NORM`). Standard RNN-stability technique.
+
+Tanh on the relational output was tried and rejected — pre-tanh activations have magnitude ~30+ at init, so tanh saturates everywhere and the network can't learn out of saturation. The right place to bound the dynamics is in the optimizer (clip_grad_norm), not in the architecture.
+
+### Pilot — `runs/in_sim-mov_h10_s0_20260426-125840_fd614df-dirty/`
+
+50K steps, ~13 min on CPU. Loss 36.8 → 0.05 EMA (400× reduction). On the held-out 79 conditions:
+
+| Supervised quantity | MSE | Target var | R²    |
+|---|---|---|---|
+| Occluded ball_x (output[4]) | 0.037 | 2.39  | 0.985 |
+| Occluded ball_y (output[5]) | 0.27  | 25.40 | 0.989 |
+| Final intercept y (output[6]) | 0.08 | 26.95 | 0.997 |
+
+`effect_receivers` shape `(79, 72, 2, 10)`, std 2.15 globally and 1.31 averaged across conditions — non-trivially varying, ready for M4.
+
+A Fig. 5B preview using **the supervised intercept output** (not the proper hidden-state-decoded version M4 will compute) shows Pearson r ≈ 0.999 from t=0 onward. This is encouraging — it suggests the IN learned the kinematics so completely that initial-state information at t=0 already determines the final intercept — but it isn't the comparison we'll publish. The honest M4 metric trains a linear decoder on `effect_receivers` and reports decoding accuracy over time; that's where the rapid-vs-slow rise question gets settled.
+
+### Pinned design choices (matter for M4 / M5)
+
+- **Object features are 7-d**: `(x, y, dx, dy, visible, is_ball, is_paddle)`. Identity flags are necessary because the relational MLP sees both objects through the same weights.
+- **Paddle held at y=0 throughout training**. M3 had no controller; the paddle is a fixed reference object so the relational graph has a peer for the ball. Revisit if a future ablation needs paddle motion.
+- **Random condition generator uses the 79's empirical envelope**, not Rajalingham's full sampling distribution. Slight bias possible but the held-out 79 are inside the envelope by construction.
+- **Output[0:2] = output[2:4] = output[4:6]** at the target level (all hold the true ball position); the loss-mask decides which is supervised when. This means a network can in principle learn three independent ball-position decoders that are forced to agree only on supervised positions. Worth keeping in mind as a degree of freedom if the M4 analysis surfaces oddities.
+
+### Carry-forward to M4
+
+- `runs/in_sim-mov_h10_s0_20260426-125840_fd614df-dirty/hidden_states.npz` is the first real artifact for the analysis pipeline. M4 should be able to read it without any model code in scope (CPU-only, npz only).
+- The `meta_index` array in the .npz aligns row-by-row with `dmfc.envs.conditions.PONG_BASIC_META_IDX`, which means the 79 rows align exactly with Rajalingham's neural-data array. No re-ordering needed at the analysis layer.
+- `effect_dim=10` matches the smaller of Rajalingham's hidden sizes; the M5 sweep will additionally do `effect_dim=20`.
+
+### Carry-forward to M5 (cluster sweep)
+
+- M5 needs SLURM scaffolding (deferred from M3 per the planning Q&A). When the time comes, the per-run wall-clock at `effect_dim=10` is ~13 min on CPU; with cluster GPUs the full 4×2×5=40-run matrix should finish in well under an hour.
+- The training loop is already CPU/GPU agnostic (`device = "cuda" if available else "cpu"`); no code changes needed for the cluster move beyond a sbatch template and a runs-root override.

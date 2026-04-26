@@ -281,9 +281,7 @@ def animate_condition(
     env = MentalPongEnv(conditions=conditions)
     env.reset(condition_id=condition_id, seed=0)
     spec = env._conditions[condition_id]
-    assert (
-        env._ball_bins is not None and env._times_ms is not None and env._traj_steps is not None
-    )
+    assert env._ball_bins is not None and env._times_ms is not None and env._traj_steps is not None
     bins = env._ball_bins  # (n_bins, 5) — masked
     traj_steps = env._traj_steps  # (n_steps+1, 4) — un-masked (for trail)
     times_ms = env._times_ms

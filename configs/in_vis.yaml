@@ -1,0 +1,14 @@
+# Rajalingham "Vis" class — supervises ball position during visible epoch + intercept y.
+model:
+  effect_dim: 10
+  relational_hidden: 150
+training:
+  loss_variant: vis-mov
+  optimizer: adam
+  lr: 1.0e-3
+  batch_size: 32
+  max_steps: 50000
+  log_every: 100
+  checkpoint_every: 5000
+  conditions_per_batch_source: random
+seed: 0
