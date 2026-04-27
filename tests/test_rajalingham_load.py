@@ -20,9 +20,11 @@ from dmfc.rajalingham.load import (
     DMFC_N_TIMESTEPS,
     DMFC_NEURAL_PKL,
     N_CONDITIONS,
+    RNN_COMPARE_PKL,
     RNN_METRICS_PKL,
     load_decode_dmfc,
     load_dmfc_neural,
+    load_rnn_compare,
     load_rnn_metrics,
 )
 
@@ -97,10 +99,22 @@ def test_load_decode_dmfc_shapes() -> None:
     assert res.neural_data_key == "neural_responses_reliable_FactorAnalysis_50"
 
 
+@pytest.mark.skipif(not _have(RNN_COMPARE_PKL), reason="RNN compare file not available")
+def test_load_rnn_compare_shape() -> None:
+    df = load_rnn_compare()
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == 192
+    # The headline Fig. 4D column lives here, not on the offline RNN df.
+    assert "pdist_similarity_occ_end_pad0_euclidean_r_xy_n_sb" in df.columns
+    assert "filename" in df.columns
+
+
 def test_file_not_found_raises_clearly(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match=DMFC_NEURAL_PKL):
         load_dmfc_neural(data_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match=RNN_METRICS_PKL):
         load_rnn_metrics(data_dir=tmp_path)
+    with pytest.raises(FileNotFoundError, match=RNN_COMPARE_PKL):
+        load_rnn_compare(data_dir=tmp_path)
     with pytest.raises(FileNotFoundError, match="decode_"):
         load_decode_dmfc(data_dir=tmp_path)

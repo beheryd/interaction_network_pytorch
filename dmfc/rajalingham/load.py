@@ -31,6 +31,9 @@ DEFAULT_DATA_DIR = Path("data/dmfc")
 DMFC_NEURAL_PKL = "all_hand_dmfc_dataset_50ms.pkl"
 RNN_METRICS_PKL = "offline_rnn_neural_responses_reliable_50.pkl"
 DECODE_PKL = "decode_all_hand_dmfc_occ_start_end_pad0_50ms_0.50_neural_responses_reliable_FactorAnalysis_50.pkl"
+RNN_COMPARE_PKL = (
+    "rnn_compare_all_hand_dmfc_occ_50ms_neural_responses_reliable_FactorAnalysis_50.pkl"
+)
 
 # Bin width used throughout the DMFC dataset and our IN training (matching
 # Rajalingham's neural binning). RNN-native bin width is 41 ms — see conditions.py.
@@ -202,6 +205,21 @@ def load_rnn_metrics(data_dir: Path | str = DEFAULT_DATA_DIR) -> RNNMetrics:
     sample = next(iter(per_model.values()))
     n_iter, n_t = sample["r_start1_all"].shape
     return RNNMetrics(df=df, per_model=per_model, n_iterations=int(n_iter), n_timesteps=int(n_t))
+
+
+def load_rnn_compare(data_dir: Path | str = DEFAULT_DATA_DIR) -> pd.DataFrame:
+    """Load the per-RNN representational-comparison summary DataFrame.
+
+    Carries the published Fig. 4D Neural Consistency column
+    ``pdist_similarity_occ_end_pad0_euclidean_r_xy_n_sb`` (and many other
+    epoch/metric variants) that ``load_rnn_metrics``' DataFrame does not
+    expose. Shape ``(192, 90)``, integer-indexed; row order is identical to
+    ``load_rnn_metrics().df`` and rows can be matched on the shared
+    ``filename`` column.
+    """
+    path = _resolve(data_dir, RNN_COMPARE_PKL)
+    raw = cast(dict[str, Any], pd.read_pickle(path))
+    return cast(pd.DataFrame, raw["summary"])
 
 
 def load_decode_dmfc(data_dir: Path | str = DEFAULT_DATA_DIR) -> DecodeResult:

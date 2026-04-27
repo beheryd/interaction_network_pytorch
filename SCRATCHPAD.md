@@ -6,6 +6,62 @@
 
 ## NOTES
 
+## Milestone 4 final close — Fig. 4 + pipeline validation (2026-04-27)
+
+Two remaining M4 sub-tasks landed in one pass: `reproduce_fig4.py` (PRD F4 secondary deliverable) and pipeline validation (PRD S1, rescoped). Test count 94→104; ruff + mypy clean. Plan file: `~/.claude/plans/can-we-continue-looking-linear-lantern.md`.
+
+### Headline correction to the validation plan
+
+**The Zenodo release does not ship per-RNN hidden states.** The earlier note (line 38 above) referencing `res_rnn['state'][model_key]['data_neur_nxcxt']` was wrong — `pd.read_pickle('offline_rnn_neural_responses_reliable_50.pkl')` only has top-level keys `df` and `all_metrics`. There is no `state`. `per_model[fn]` carries `yp`, `yt`, `r_start1_all`, `mae_start1_all`, and bounce-stratified variants — no states.
+
+Implication: per-RNN external validation (recompute our NC/SI on each RNN's hidden states, compare to the published columns within ~1e-3) is **infeasible without rerunning their training pipeline**. The validation pivoted to a math-identity check.
+
+### Pipeline validation as it actually landed
+
+`dmfc/analysis/validate_pipeline.py` imports Rajalingham's reference functions directly from the unpacked Zenodo source tree at `~/Downloads/MentalPong/`:
+
+- `code/utils/phys_utils.get_state_pairwise_distances` — RDM construction.
+- `analyses/rnn/RnnNeuralComparer.RnnNeuralComparer.get_noise_corrected_corr` — noise-corrected RSA (`r_xy_n_sb`, `r_xy_n`, `r_xx`, `r_yy`, `r_xy`).
+- The SI math is small enough (KFold + OLS + per-coord MAE) that we re-state it inline with explicit attribution rather than wrestling with `rnn_analysis_utils.get_model_simulation_index`'s upstream-package imports.
+
+Both pipelines are run on a fixed-seed synthetic input (`(20, 30, 8)` model states + `(15, 20, 30)` neural states with 0.3-noise split halves), and outputs compared element-by-element. **All three checks pass at 0.0e+00 max-absolute-diff** — bit-for-bit equivalence.
+
+Two import-time gotchas worth preserving:
+1. **`RnnNeuralComparer.py` imports `from phys import phys_utils, data_utils`** — a package layout that doesn't exist as `phys/` in the Zenodo bundle (the file is at `code/utils/phys_utils.py`). Workaround: alias `phys` → a synthetic `types.ModuleType("phys")` with `phys_utils` as a sub-attribute, plus a stub for `data_utils` (referenced at import but only used by methods we don't call). Logic in `validate_pipeline.import_reference`.
+2. **`code/utils/utils.py` is referenced as just `utils`** by `rnn_analysis_utils.py`; we register the alias in `sys.modules` to keep its `flatten_to_mat` accessible.
+
+For posterity: these workarounds are **only** needed inside `validate_pipeline.py`. The main analysis pipeline is self-contained and doesn't import any Zenodo source code.
+
+### Fig. 4 (PRD F4) results
+
+`figures/fig4_pilot.png` — two-panel scatter, NC on the left, SI on the right. RNN swarms = 96 gabor_pca models pulled from the published `pdist_similarity_occ_end_pad0_euclidean_r_xy_n_sb` (NC, lives in `rnn_compare_*.pkl['summary']`) and `decode_vis-sim_to_sim_index_mae_k2` (SI, lives in `offline_rnn_*.pkl['df']`). IN points = 4 pilot runs, computed on-the-fly via our pipeline.
+
+| Loss class | IN NC | RNN NC mean | IN SI (deg) | RNN SI mean (deg) |
+|---|---:|---:|---:|---:|
+| Intercept (mov, seed=1) | 0.241 | ~0.16 | 1.79 | ~3.0 |
+| Vis (vis-mov) | 0.066 | ~0.27 | 1.69 | ~2.5 |
+| Vis+Occ (vis-sim-mov) | -0.082 | ~0.34 | 0.16 | ~1.7 |
+| Vis&Occ (sim-mov) | 0.476 | ~0.32 | 0.77 | ~1.4 |
+
+Two patterns the pilot already shows:
+
+1. **IN's SI is uniformly lower (better) than the RNN swarm** across all four loss variants. Most extreme on Vis+Occ (IN 0.16° vs RNN ~1.7°) where the IN essentially solves online ball position decoding. Plausible reason: object-relational structure + explicit kinematic input gives the IN a structural advantage on the simulation task that RNNs trained on pixels can't easily match. This is a positive answer to PRD S3 ("does the IN swarm land within the RNN swarm range on Fig. 4?") — the IN is *outside* the RNN swarm, in the better-than direction.
+2. **IN's NC (representational geometry alignment with DMFC) is variant-dependent and not uniformly better/worse**. Vis&Occ (sim-mov) sits well above the RNN swarm at 0.476 (vs RNN ~0.32); Intercept lands inside the RNN swarm; Vis and Vis+Occ are below the RNN swarm. So the IN can match RNN's NC on the variant that supervises *only* occluded position + endpoint, but underperforms on intermediate-supervision variants. M5's full sweep (5 seeds, 2 hidden sizes per variant) will tell us how seed-stable these are.
+
+### Loader extension
+
+`load_rnn_compare(data_dir)` added to `dmfc/rajalingham/load.py`. Returns the (192, 90) summary DataFrame from `rnn_compare_all_hand_dmfc_occ_50ms_neural_responses_reliable_FactorAnalysis_50.pkl`. Carries the published Fig. 4D NC column. Row order is identical to `load_rnn_metrics().df` and rows are joinable on `filename`.
+
+### Carry-forward to M5
+
+- **Intercept HP pass** is still the only M5 prereq. The `mov` variant on seed=0 diverged to NaN by step 800 (SCRATCHPAD M4 progress 4); seed=1 converges with default settings but reproducibility across all 5 seeds is not guaranteed. Lower lr / stricter clip / weight decay are the suggested first sweeps.
+- **Diverged-run handling** in `reproduce_fig4.py`: `_has_diverged_states` skips run dirs whose `effect_receivers` contain NaN. Means the canonical `python -m dmfc.analysis.reproduce_fig4 --in-runs runs/in_*` (per CLAUDE.md) won't crash on the diverged seed=0 mov pilot.
+- **Statistical tests for Fig. 4** (M5 sub-task): the IN's "uniformly lower SI" pattern is real on a single seed/hidden-size; with 5 seeds × 2 hidden sizes per variant we can test it formally (Wilcoxon rank-sum: IN SI distribution vs RNN class SI distribution). Same for NC. The current Vis&Occ-above-RNN-swarm finding on NC is the most interesting and the one most worth pinning down with the M5 statistics.
+
+### Time-axis question (carry-forward from the user's prompt)
+
+The user asked what "Time from trial start" represents on `figures/fig5b_4variants_aligned.png`, especially past the 1200 ms display crop. Plan file has the full explanation; the short version: **all 79 conditions exceed 1200 ms** (min t_f = 1353 ms motion-onset to interception, median 2132 ms, max 3526 ms), so within the displayed window every bin sees every condition. Beyond ~1350 ms conditions begin terminating; per-timestep r is computed only on the still-valid subset, hence the late-trial volatility. The 1200 ms crop is the right honest window. Optional follow-up: add a "n_valid(t)" overlay to the figure for the writeup. Skipped for now per the user's instruction to focus on M4 close.
+
 ## Milestone 1 findings — Rajalingham Zenodo release inspection (2026-04-22)
 
 The Zenodo release is at `/Users/david/Downloads/MentalPong`. Key findings below.
