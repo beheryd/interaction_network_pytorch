@@ -397,6 +397,116 @@ The other three loss variants (`mov`, `vis-mov`, `vis-sim-mov`) may also show di
 - **Mask names exposed by `load_dmfc_neural`** are the canonical 8 (`pretrial_pad0`, `start_end_pad0`, `start_occ_pad0`, `occ_end_pad0`, `f_pad0`, `occ_pad0`, `start_pad0`, `half_pad0`). The Zenodo pickle ships ~600 `_rollN` shifted variants used for cross-validated time-shift analyses; pass them via `extra_masks=` if needed instead of paying the dict-construction cost by default.
 - **`load_decode_dmfc` exposes all 11 `res_decode` entries**, not just the last. Looking at `r_mu[:3]` across the 11, they're a smooth sweep of some scaling parameter (likely a regularization or PLS-component count). The figure script can pick the right one when it lands; the loader stays neutral.
 
+## Milestone 4 progress 5 — DMFC time-axis alignment + two-stage decoder + 4-variant figure (2026-04-27, end of session)
+
+### What landed in this session
+
+- **DMFC time-axis fix**. The original `figures/fig5b_pilot.png` had the DMFC curve shifted right by 300 ms — its rapid rise was visible at ~500 ms instead of the paper's reported ~200 ms. Root cause: bin 0 of `all_hand_dmfc_dataset_50ms.pkl` is **not** motion onset. Per Methods (paper page 10), trials include a 300 ms pre-trial period during which the ball is rendered stationary at `(x₀, y₀)` before motion begins. In the dataset:
+  - `t_from_start[0, 0] = -6` (in 50 ms bin units) → bin 0 is at t = -300 ms.
+  - `t_from_start[0, 6] = 0` → bin 6 is motion onset (uniform across all 79 conditions).
+  - `ball_pos_x` is NaN for bins 0–5; first finite value at bin 6 confirms motion-onset alignment.
+  - `start_end_pad0` mask becomes valid at bin 6 across all conditions.
+  
+  Fix in `dmfc_curve()`: read `motion_onset_bin = argmax(t_from_start[0] >= 0)` and offset the source time grid by `-motion_onset_bin × bin_ms`. The IN's `hidden_states.npz` (env-side `integrate_trajectory` step 0 = motion onset) and the RNN's `r_start1_all` (named "_start1_" = aligned to motion onset) were already correctly aligned, so only DMFC needed the shift. Post-fix DMFC reaches r ≈ 0.78 at 200 ms and plateaus at ~0.85 from 250–1000 ms — quantitatively consistent with the paper's published Fig. 5B.
+
+- **All 4 IN loss-variant pilots trained**. Seeds 0, effect_dim=10, 50K steps each (~13 min CPU per run, three in parallel for ~25 min wall clock). `vis-mov` and `vis-sim-mov` converged cleanly on seed=0; **`mov` (Intercept) diverged to NaN by step 800 on seed=0** and was retrained on seed=1 (final loss 0.028, effect_receivers std 0.80). Failure mode: with only output[6] supervised, the gradient signal on the 7-d output head is too sparse to constrain the recurrent loop's unsupervised channels — they drift, the head re-tugs the recurrence, runaway. Existing grad-clip @ norm 1.0 isn't sufficient for Intercept. M5 needs an Intercept-specific HP pass (lower lr, stricter clip, or weight decay) before launching the full 40-run sweep.
+
+- **`dmfc/analysis/two_stage_endpoint.py`** (Rajalingham Supplementary Fig. S8D analog). Two-stage decoder: `state(t) → (x, y, dx, dy)(t)` then `kinematics → endpoint`. Kinematics built by integrating the canonical 79 conditions on the 50 ms grid via the env's `integrate_trajectory` + `_resample_to_bins`. Returns three curves per timestep (direct, kinematics-mediated, kinematics-only) plus a per-axis state→kinematics curve. 7 tests including a synthetic factor-based design (per-condition kinematic factor + small bin noise so the kinematics-only baseline carries condition identity at every t) and pilot smoke. Pilot results across all 4 IN variants:
+
+  | Variant | Direct r | Kinmed r | Kinonly r | Gap (direct − kinmed) |
+  |---|---:|---:|---:|---:|
+  | Intercept (seed=1)  | 0.823 | 0.674 | 0.787 | 0.149 |
+  | Vis (vis-mov)       | 0.830 | 0.666 | 0.787 | 0.164 |
+  | Vis+Occ (vis-sim-mov)| 0.976 | 0.843 | 0.787 | 0.133 |
+  | Vis&Occ (sim-mov)   | 0.897 | 0.777 | 0.787 | 0.120 |
+
+  Two structural findings:
+  1. **Kinonly = 0.787 is uniform** across variants (it depends only on true kinematics → endpoint, not on the model). It's the linear ceiling for "endpoint inferred from instantaneous kinematics, ignoring bounce sign-flips".
+  2. **Direct > kinonly in every variant** (gaps 0.04–0.19). The IN's effect_receivers contain endpoint-relevant information *beyond* what's mechanically inferable from instantaneous `(x, y, dx, dy)`. Most plausibly bounce-aware future-trajectory inference: the IN can resolve "will this bounce" / "did this bounce" from accumulated history, while a single-timestep linear decoder of `(x, y, dx, dy)` cannot. This is a defensible "the IN computes something" finding for the writeup.
+
+- **`reproduce_fig5b.py` x-axis cropped to 0–1200 ms by default** (display-only). Curves are still computed on the full window; new `--xlim-ms MIN MAX` CLI flag overrides. Matches the paper's framing (early-prediction window) and visually de-emphasizes late-trial DMFC volatility from conditions running out of valid bins.
+
+### Pinned design choices that matter for M5 / writeup
+
+- **`figures/fig5b_4variants_aligned.png` is the current canonical figure**: motion-onset aligned, 0–1200 ms cropped, all 4 IN variants overlaid. The four IN curves overlap at r ≈ 1.0 from t=0 onward — input-asymmetry effect, robust across loss variants. The two-stage analysis is the honest control for that.
+- **Two-stage panel for the figure is deferred** per user direction; the analysis exists and can be plotted at any time. When it lands, the natural form is a second panel beside the current one showing direct vs. kinematics-mediated curves per variant.
+- **The Intercept failure with seed=0 is a real M5 risk.** Diverged at step 800 with the same lr/clip settings that converge for the other three variants. Adding an Intercept-specific config or HP override is a hard prerequisite for the M5 sweep.
+
+### Carry-forward to M4 final close
+
+- `reproduce_fig4.py` (secondary deliverable, PRD F4): now mostly assembly. Loop the 192 RNN models, compute IN's NC and SI on each pilot, plot the 2-panel scatter. The building blocks (`rdm.py`, `neural_consistency.py`, `simulation_index.py`) all exist and are tested.
+- Pipeline validation (PRD S1): for each gabor_pca RNN, compute our NC and SI from `per_model[fn]['data_neur_nxcxt']` and compare to `df.loc[fn, 'pdist_similarity_occ_end_pad0_euclidean_r_xy_n_sb']` and `df.loc[fn, 'decode_vis-sim_to_sim_index_mae_k2']`. Match within ~1e-3 ⇒ pipeline correct. This is the gate to M5.
+
+## Milestone 4 progress 4 — Fig. 5B input-asymmetry diagnosis (2026-04-27, post-figure)
+
+Generated `figures/fig5b_pilot.png` (single sim-mov pilot) and immediately flagged a problem: the IN curve sits at r ≈ 1.0 from t=0 onward, well above DMFC's rapid-rise plateau (~0.85 starting ~500ms). Trained pilots for the other three loss variants and confirmed: **all four IN variants exhibit the same r ≈ 1 from t=0 behavior** (`figures/fig5b_3of4.png` — sim-mov, vis-mov, vis-sim-mov; mov diverged on seed=0 and is being retrained on seed=1). The behavior is structural to the IN's input format, not specific to which loss variant is in use.
+
+### Root cause: input asymmetry vs. Rajalingham's RNNs
+
+Confirmed by reading the paper (s41467-024-54688-y.pdf, page 12, "RNN models" section): **"RNNs were trained to map a series of visual inputs (pixel frames) to a movement output."** Their RNNs receive raw pixel frames (PCA-compressed Gabor features per the Zenodo release). Our IN receives `(x, y, dx, dy, visible, is_ball, is_paddle)` as object features — i.e., **ground-truth ball position AND velocity from frame 1**.
+
+This is a structural head-start: a single pixel frame contains ball *position* but not *velocity* (you need ≥2 frames for finite-difference velocity). With Mental Pong's deterministic kinematics (constant speed, ≤1 reflection at y=±9.6°, paddle line at x=10°), the endpoint is closed-form computable from `(x₀, y₀, dx₀, dy₀)` — four scalars. So a linear decoder of the IN's t=0 effect_receivers (a non-linear transform of those four scalars) can trivially recover the endpoint.
+
+### The paper itself flagged this exact confound
+
+Page 9, ¶2: *"we considered the possibility that the early signals, which carry information about the ball's initial position, predict the endpoint because the initial and endpoints are correlated."* Rajalingham controlled for this via two-stage decoding (Supplementary Fig. S8D): they decoded position from early DMFC, then asked whether decoded position alone could predict endpoint. Position alone could not; position+velocity could. So even DMFC's rapid rise *might* leverage the same kinematic shortcut we're handing the IN for free.
+
+### Implications for the writeup
+
+1. **The figure is faithful to what we built**, but the rapid-vs-slow comparison vs. RNNs is not apples-to-apples on input format. PRD/NG3 already documented this as the Option-2-inputs decision; the writeup must carry the caveat front-and-center.
+2. **All four IN variants showing r ≈ 1 from t=0 is informative**: the input-asymmetry effect dominates over loss-variant differences. If we want to study how loss-variant choice affects representational geometry, Fig. 4 (Neural Consistency × Simulation Index) is the right axis — Fig. 5B is dominated by the input format.
+3. **Honest mitigation paths** (in order of cost):
+   - (a) Two-stage decoding control (S8D analog): decode `(x, y, dx, dy)` from IN states at each time t, then decode endpoint from those — this isolates the IN's *additional* contribution beyond raw initial-condition decodability. Modest scope; lives in the writeup methods.
+   - (b) **Pixel-input IN** (PRD NG3 future work): drop a small CNN front-end before the IN's object-graph stage. Big scope; not for this project.
+   - (c) Discuss in writeup limitations section without modifying the analysis. Cheapest; honest if (a) and (b) are out of scope.
+
+### IN training stability — Intercept variant divergence
+
+Intercept (`mov`, supervise only output[6] = final intercept y) diverged to NaN by step 800 with seed=0. Vis, Vis+Occ, Vis&Occ all converged cleanly at the same lr/grad-clip settings. Diagnosis: with only one supervised output (a single scalar per condition), the gradient signal is too weak to constrain the unsupervised output channels (output[0:6]); these drift, the output-head weights tug back into the recurrent loop, and the recurrent dynamics blow up. This is a more aggressive instance of the M3 "recurrent loop has no fixed point" failure mode that gradient clipping at norm 1.0 already fixed for the other variants.
+
+Retrying with seed=1; if that also fails, fall back options are (in order):
+1. Lower lr to 5e-4
+2. Lower grad clip norm to 0.5
+3. Add weight decay 1e-4
+4. Reduce max_steps to 20K (might be overshooting convergence)
+
+For the M5 sweep, this implies **Intercept training will need its own hyperparameter pass** before launching all 40 runs. Worth flagging in the M5 task description.
+
+## Milestone 4 progress 3 — Fig. 4 building blocks + Fig. 5B (2026-04-27)
+
+Closed out the four remaining M4 modules in one pass: `rdm.py`, `neural_consistency.py`, `simulation_index.py`, `reproduce_fig5b.py`. Test count 47 → 87 (+40); ruff + mypy clean. Plan file: `~/.claude/plans/depending-on-the-difficulty-declarative-rivest.md`.
+
+### Headline result: extended Fig. 5B reproduces the rapid-vs-slow rise
+
+`figures/fig5b_pilot.png` shows three groups on a shared 50 ms time axis (linear-interp from RNN's 41 ms native):
+
+- **DMFC** (orange): rapid rise from ~0 to ~0.85 by t≈500 ms, sustained until t≈2400 ms, then noisy decline as fewer conditions remain valid past the longest-trial duration. Matches the published Fig. 5B shape qualitatively.
+- **Four RNN class curves** (greys, mov / vis-mov / vis-sim-mov / sim-mov, all gabor_pca subset): slow gradual rise reaching ~0.7 by t≈1700 ms. Curves cluster tight (band overlap); little class differentiation visible at the published-iteration aggregate level.
+- **IN** (blue, sim-mov pilot): r ≈ 1.0 from t=0 onward, with a drop near the end of the trial as valid windows shrink. **This is exactly what the M3 closeout predicted** for sim-mov: deterministic kinematics + occluded-ball + intercept supervision lets the IN embed full initial-condition information into `effect_receivers` from the very first step. The interesting comparison comes when the M5 sweep adds the `mov`/`vis-mov`/`vis-sim-mov` IN variants — those don't supervise occluded-ball position, so the IN should have less reason to encode endpoint-determining info from t=0.
+
+The figure validates the **pipeline** more than it validates the **science**: the science question (does the IN match DMFC's rapid rise across loss variants?) is decided by the M5 sweep, not by the pilot.
+
+### Implementation gotchas worth remembering
+
+1. **Rajalingham's RDM cells are (cond, t) pairs, not conditions.** `get_state_pairwise_distances` (`code/utils/phys_utils.py:371`) takes states with axis order `(n_units, n_cond, T)` (line 248 of `RnnNeuralComparer.py` confirms the transpose), applies a 2-D mask, and pools all valid cells across both conditions and time into a `(n_cells, n_units)` sample matrix. The RDM is over those pooled cells. We adopted the same convention but with the more natural `(n_cond, T, n_features)` axis order so it composes with `flatten_receivers`. Both yield identical RDMs — only the wrapper transposes are different.
+2. **`r_start1_all` is `(100 iter, 90 t)`, not `(100 iter, 79 cond, 90 t)`** as an earlier SCRATCHPAD line implied. The 79-condition aggregation is already baked into the per-iteration r — verified live. The full per-condition predictions are in `yp`/`yt` shape `(100, 79, 90)`, which is what would be needed for `--align onset`.
+3. **`df['filename']` is the linker between `df` and `per_model`**, not `df['name']` (which is a higher-level grouping path with no checkpoint hash). The per_model keys are full checkpoint paths.
+4. **Spearman-Brown can push noise-corrected r above 1.0** when `r_xx` is moderate and the underlying RDM correlation is high; this is mathematically valid but worth flagging in plots so a reader doesn't think the metric is broken. Both the `r_xy_n_sb` (full SB-corrected) and `r_xy_n` (no SB) variants are returned for transparency.
+5. **The `--align onset` flag is wired up but raises NotImplementedError**. The honest implementation requires per-RNN per-condition decoding curves (because shifting curves by per-condition `t_occ` requires resolution at the condition level), and Rajalingham's release pre-aggregates across the 79 conditions in `r_start1_all`. The path forward is to recompute per-RNN per-condition r from `yp`/`yt` (`(100, 79, 90)`) — feasible but deserves its own session.
+
+### Pinned design choices that matter for M5/M6
+
+- **DMFC per-timestep curve must be re-computed by us.** The released `decode_*.pkl` has per-target r values across 23 behaviors but not per-timestep curves. We run `decode_endpoint` on `responses_reliable` `(1889, 79, 100)` (transposed to `(79, 100, 1889)`) with target `behavioral['ball_final_y'][:, 0]` and mask `start_end_pad0`. The DMFC curve is therefore *our* product, not Rajalingham's; if the writeup needs an apples-to-apples comparison with their published DMFC line, we'd have to reach out for their per-timestep numbers.
+- **Neural Consistency uses occlusion-only mask `occ_end_pad0`** (per Rajalingham `RnnNeuralComparer.compare_representational_geometry_rnn_to_neural_data`, line 220 onward). Implemented in `neural_consistency_from_states(..., mask=...)` so the caller picks; our convention will be `dmfc.masks['occ_end_pad0']` for Fig. 4D.
+- **Simulation Index uses train-mask = visible+occluded valid bins (`output_vis-sim`), test-mask = occluded-only (`output_sim`)**. For our IN runs that's `train_mask = valid_mask`, `test_mask = valid_mask & ~visible_mask`. The Zenodo k=2 default is what Fig. 4E plots; we expose `k` as a parameter but default to 2.
+- **No pipeline validation in this plan.** Per the plan file, validating our `neural_consistency` and `simulation_index` against Rajalingham's published values (`df['pdist_similarity_*_r_xy_n_sb']` and `df['decode_vis-sim_to_sim_index_mae_k2']`) is its own follow-up. Until that happens, our Fig. 4 numbers should be considered *internally consistent* but not yet *externally validated*.
+
+### Carry-forward to next M4 task (`reproduce_fig4.py` + pipeline validation)
+
+- The Fig. 4 reproduction is now mostly assembly: load all 192 RNN models' precomputed metrics, load DMFC, compute IN's NC and SI, plot a 2-panel scatter (NC × SI) with per-class swarms.
+- **Pipeline validation (PRD S1)** is the substantive remaining M4 step. For each gabor_pca RNN: load its `data_neur_nxcxt` from `per_model[fn]['data_neur_nxcxt']` (per the SCRATCHPAD note — verify this key exists; if not, re-extract from somewhere else in the pickle), then run our `neural_consistency_from_states` and `simulation_index` and compare to `df.loc[fn, 'pdist_similarity_occ_end_pad0_euclidean_r_xy_n_sb']` and `df.loc[fn, 'decode_vis-sim_to_sim_index_mae_k2']`. Match within ~1e-3 = pipeline correct.
+- The M3 carry-forward note "looking at curves re-aligned to occlusion onset" still stands as the right move for the writeup's Fig. 5B comparison once the M5 sweep lands. With per-condition `t_occ` shifts and per-condition predictions for all three groups, the rapid-vs-slow rise structure becomes more interpretable than on a shared trial-start axis.
+
 ### Carry-forward to next M4 task (`rdm.py` → `neural_consistency.py` → `simulation_index.py` → `reproduce_fig5b.py`)
 
 - **Re-aligning curves to `t_occ`**: per condition, `ConditionSpec.t_occ_steps × RNN_STEP_MS / DMFC_BIN_MS` gives the IN-grid bin where occlusion starts. For each cond, slice `effect_receivers[c, t_occ_bin:t_occ_bin+W, :]` then average across cond. That's the input to a Fig. 5B-style decoder if we want a clean post-occlusion curve.
