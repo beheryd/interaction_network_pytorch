@@ -53,8 +53,8 @@ Goal: one IN and one flat-RNN pipeline baseline train end-to-end, produce valid 
 
 Goal: all four analysis metrics from PRD A6 work end-to-end on the pilot IN runs, and the reproduce_fig5b / reproduce_fig4 scripts regenerate extended figures.
 
-- [ ] `dmfc/rajalingham/load.py`: adapter for loading the DMFC population data and the published RNN outputs from the Zenodo release. Decoupled from everything else; if the format changes, only this file breaks.
-- [ ] `dmfc/analysis/endpoint_decoding.py` (PRIMARY — Fig. 5B metric): time-resolved linear decoding of endpoint ball_y from hidden states. Cross-validated across conditions. Returns Pearson r and RMSE vectors over time matching the 0–1200 ms axis of Fig. 5B.
+- [x] `dmfc/rajalingham/load.py`: adapter for loading the DMFC population data and the published RNN outputs from the Zenodo release. Three loaders (`load_dmfc_neural`, `load_rnn_metrics`, `load_decode_dmfc`), frozen dataclasses, `pd.read_pickle` shim for old-pandas pickles. (2026-04-26)
+- [x] `dmfc/analysis/endpoint_decoding.py` (PRIMARY — Fig. 5B metric): time-resolved linear decoding of endpoint ball_y from hidden states via `GroupKFold` across the 79 conditions and per-timestep `LinearRegression`. Returns `r(T)`, `rmse(T)`, plus per-fold curves. Pilot smoke confirms M3-flagged finding: `effect_receivers` carry full endpoint info from t=0 (r ≈ 0.999 throughout). (2026-04-26)
 - [ ] `dmfc/analysis/rdm.py`: pairwise-distance matrix computation for hidden states, restricted to occluded-epoch states per Rajalingham Fig. 4C.
 - [ ] `dmfc/analysis/neural_consistency.py`: noise-adjusted correlation per Rajalingham Eq. 4, with split-half reliability estimation. Validate by reproducing the published RNN class means from Fig. 4D within noise.
 - [ ] `dmfc/analysis/simulation_index.py`: linear decoder for ball position during occlusion, mean absolute error metric. Validate against Rajalingham's published SI distribution.

@@ -360,3 +360,45 @@ A Fig. 5B preview using **the supervised intercept output** (not the proper hidd
 
 - M5 needs SLURM scaffolding (deferred from M3 per the planning Q&A). When the time comes, the per-run wall-clock at `effect_dim=10` is ~13 min on CPU; with cluster GPUs the full 4×2×5=40-run matrix should finish in well under an hour.
 - The training loop is already CPU/GPU agnostic (`device = "cuda" if available else "cpu"`); no code changes needed for the cluster move beyond a sbatch template and a runs-root override.
+
+## Milestone 4 progress — loader + endpoint decoder (2026-04-26)
+
+First two M4 modules landed: the Zenodo adapter (`dmfc/rajalingham/load.py`) and the time-resolved endpoint decoder (`dmfc/analysis/endpoint_decoding.py`). Plan file at `~/.claude/plans/crystalline-cuddling-bentley.md`.
+
+### What got built
+
+- `dmfc/rajalingham/load.py` — three frozen-dataclass loaders, no analysis logic:
+  - `load_dmfc_neural()` → `DMFCData` with `responses (n_neur, 79, 100)`, `responses_sh1`/`_sh2`, canonical `masks` (8 names; `extra_masks=` opens up the `_roll` shifts), `behavioral` dict, `meta_index` from `PONG_BASIC_META_IDX`. The pooled DMFC `neural_responses_reliable['occ']` is 1889 reliable units.
+  - `load_rnn_metrics()` → `RNNMetrics` with `df (192, 695)` and `per_model[ckpt_path] -> {yp, yt, r_start1_all, mae_start1_all, ...}`. `r_start1_all` shape `(100 iter, 90 t)`.
+  - `load_decode_dmfc()` → `DecodeResult` with the 23-target `beh_targets` list, `entries` (a list of 11 res_decode sub-dicts), `decoder_specs`, `neural_data_key`. The pickle key `'neural_data_to_use '` has a trailing space we preserve as-is when reading.
+  - All loaders use `pd.read_pickle` (not raw `pickle.load`) — the Zenodo pickles need the old-pandas `pandas.core.indexes.numeric` shim that pandas handles transparently.
+- `dmfc/analysis/endpoint_decoding.py` — pure numerics, no I/O:
+  - `decode_endpoint(states, endpoint_y, valid_mask=None, n_splits=5)` → `DecodingResult` with per-fold and fold-averaged `r(T)` / `rmse(T)`. `GroupKFold` across the 79 conditions, per-timestep `LinearRegression` (1-D target → no need for PLS).
+  - `flatten_receivers((n_cond, T, 2, eff))` → `(n_cond, T, 2*eff)` — first object's effect goes into the first half of the feature vector.
+  - `load_pilot_states(run_dir)` reads `hidden_states.npz` and returns `(states_flat, endpoint_y, valid_mask)` ready to feed `decode_endpoint`. `endpoint_y` is `targets[:, 0, 6]` (output index 6 is the final intercept y per M3 closeout).
+- Tests: `tests/test_rajalingham_load.py` (5 tests, 4 skip-if-data-missing) and `tests/test_endpoint_decoding.py` (9 tests: synthetic perfect-signal/noise/shape/determinism/mask + pilot smoke). Suite total: 33 → 47.
+
+### One real surprise — M3's "r ≈ 0.999 from t=0" was true for the proper hidden-state decoder too
+
+The M3 closeout flagged that the *supervised* output index 6 already gives r ≈ 0.999 from t=0. I expected the proper hidden-state-decoded version (LinearRegression on `effect_receivers`) to show a learning curve — early states uninformative, late states fully informative — so the pilot test originally asserted `late > early`.
+
+It doesn't. The decoder run on the pilot returns r[0]=0.999, r[35]=0.999, r[71]=NaN (last timestep is past every condition's valid window — masked correctly). The IN's effect_receivers encode the deterministic kinematics so completely that the eventual endpoint is already linear-decodable from the very first step.
+
+This is the `sim-mov` (Vis&Occ) loss variant, which directly supervises occluded ball position + final intercept. With deterministic kinematics + endpoint supervision, the network has a strong incentive to embed initial-condition info into the relational state from the start. The result isn't wrong — it's just that this particular variant's hidden states don't have the rapid-vs-slow rise structure that Fig. 5B exists to differentiate.
+
+**The honest Fig. 5B comparison will need to look at curves re-aligned to occlusion onset**, where the slope before vs. after occlusion is the signal. With 79 conditions at different `t_occ` values, the per-timestep curve on the absolute time axis mixes pre- and post-occlusion phases together; only after re-alignment does "decodability rises after occlusion onset" become visible. That re-alignment lives in `reproduce_fig5b.py` (next M4 task), not in the decoder module.
+
+The other three loss variants (`mov`, `vis-mov`, `vis-sim-mov`) may also show different baseline decodability — `mov` (Intercept) only supervises the endpoint, no per-timestep ball position, so its hidden states might not encode initial conditions as eagerly. M5's full sweep will tell us.
+
+### Pinned design choices (matter for downstream M4)
+
+- **Decoder is `LinearRegression`, not PLS.** Rajalingham's `linear_regress_grouped` uses PLS by default because its target is multi-output. Our endpoint target is 1-D (a single scalar per condition), so PLS adds no value over plain OLS. The CV strategy (`GroupKFold` across conditions) matches theirs exactly.
+- **`valid_mask` excludes invalid (cond, t) cells from per-timestep r/RMSE only**, not from training. If condition c is masked invalid at t, c's row is dropped from the test-fold Pearson at t but the decoder still trains on whatever valid rows exist in the train fold at t. NaN propagates cleanly through `np.nanmean` for all-invalid columns; the documented "Mean of empty slice" warning is suppressed at source since the NaN itself is the signal.
+- **Mask names exposed by `load_dmfc_neural`** are the canonical 8 (`pretrial_pad0`, `start_end_pad0`, `start_occ_pad0`, `occ_end_pad0`, `f_pad0`, `occ_pad0`, `start_pad0`, `half_pad0`). The Zenodo pickle ships ~600 `_rollN` shifted variants used for cross-validated time-shift analyses; pass them via `extra_masks=` if needed instead of paying the dict-construction cost by default.
+- **`load_decode_dmfc` exposes all 11 `res_decode` entries**, not just the last. Looking at `r_mu[:3]` across the 11, they're a smooth sweep of some scaling parameter (likely a regularization or PLS-component count). The figure script can pick the right one when it lands; the loader stays neutral.
+
+### Carry-forward to next M4 task (`rdm.py` → `neural_consistency.py` → `simulation_index.py` → `reproduce_fig5b.py`)
+
+- **Re-aligning curves to `t_occ`**: per condition, `ConditionSpec.t_occ_steps × RNN_STEP_MS / DMFC_BIN_MS` gives the IN-grid bin where occlusion starts. For each cond, slice `effect_receivers[c, t_occ_bin:t_occ_bin+W, :]` then average across cond. That's the input to a Fig. 5B-style decoder if we want a clean post-occlusion curve.
+- **Per-timestep DMFC curves**: not yet confirmed where they live. The `decode_*.pkl` we loaded has `(23,)` r_mu — that's per-target, not per-timestep. The per-timestep DMFC curve may have to be computed by us by running a `linear_regress_grouped`-style decoder on `DMFCData.responses` directly, mirroring what we did for the IN. If so, `endpoint_decoding.decode_endpoint` is already a drop-in (the loader returns the right `(n_neur, 79, 100)` shape; transpose to `(79, 100, n_neur)` and feed it).
+- **Time alignment between IN, RNN, DMFC**: IN at 50 ms × 72 = 3600 ms; DMFC at 50 ms × 100 = 5000 ms; RNN at 41 ms × 90 = 3690 ms. For the Fig. 5B overlay, all three need to land on the same x-axis. Resampling the RNN's 41 ms grid to 50 ms is the cleanest move; alternatively, plot all three on time-relative-to-occlusion in their native bins and let the shared `t=0` carry the comparison.
