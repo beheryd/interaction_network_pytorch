@@ -6,6 +6,132 @@
 
 ## NOTES
 
+## Milestone 5 sweep + figures + stats scaffolding (2026-04-29)
+
+Three work blocks landed in one push: (1) the full 40-run M5 sweep, (2) the two M5 figures regenerated on it, (3) `dmfc/analysis/stats.py` so the formal Wilcoxon/partial-R² stage is unblocked. The M5 sweep ran clean from end to end and reproduces Rajalingham's main structural findings.
+
+### M5 sweep — 40/40 converged
+
+SLURM job 9168152 on `gershman_lab/shared` (`--array=5-39%10`, 2h walltime per task). Rows 0-4 of the matrix were symlinked from the Intercept HP-pass runs (functionally identical: `mov`, h=10, seeds 0–4, clip=0.5) so we didn't burn ~5h re-training them.
+
+Headline numbers across the 40 runs:
+
+- **State**: 35/35 array tasks `COMPLETED 0:0` (no TIMEOUTs, no NODE_FAILs).
+- **Convergence**: final losses 0.009–0.087. Per-variant medians: vis-mov 0.015 (best), vis-sim-mov 0.033, sim-mov 0.041, mov 0.028. Zero NaN lines across all 40 × 50000 steps.
+- **Wall clock**: 1:02–1:31 per task; ~3.5 h end-to-end. The throttle (`%10`) was the right setting — node-pool contention varied from 5 to 25 over the run, never starved.
+- **Disk**: 40 × ~1.5 MB run dirs under `runs_m5/`.
+
+### Two figures, two style choices the user pinned
+
+`figures/fig5b_full_sweep.png` (primary deliverable, PRD F3):
+- **Aggregated by loss class**, not 40 spaghetti lines. Refactored `reproduce_fig5b.py`: new `aggregate_in_curves_by_class()` helper pools the 10 runs per class (2 hidden × 5 seeds) into one mean+SEM curve. CLI flag `--in-aggregation {by-class,per-run}` defaults to `by-class`.
+- **Palette matched to Fig. 4 panel D**: Intercept blue, Vis green, Vis+Occ red, Vis&Occ orange. **DMFC = black**, RNN = grey family.
+- One color-routing bug surfaced and fixed: substring matching on labels routed all "Vis…" classes to green because "Vis" is a substring of "Vis+Occ" and "Vis&Occ". Fix: iterate longest-label-first in `_in_curve_color()`.
+- **Result**: all 4 IN class lines stack at r ≈ 1.0 from t=0 (input-asymmetry effect, robust across loss variants — the M4 progress 4 finding holds at full sweep). DMFC rapid rise to ~0.85 by 200 ms; RNN classes slow rise to 0.5–0.65 by 1200 ms.
+
+`figures/fig4_paper_replica.png` (secondary deliverable, PRD F4 — paper-replica variant):
+- **3-panel D/E/F layout**, IN-only (no RNN data per user direction).
+- Color = loss class (same Fig. 4 palette). Marker size = hidden units (10 small / 20 large). Regression lines on E and F.
+- **Axis auto-extension**: paper-strict limits when IN data fits, silent extension when data spills out (option 2 from the user). Panel F is the visible case — IN's task MAE 0.1–0.5° vs paper's 1–4°, axis auto-stretched right to ~0.
+- The 40-run version reproduces the structural findings:
+  - **Panel D**: Vis+Occ (median NC ≈ 0.52) and Vis&Occ (≈ 0.55) substantially above Intercept (≈ 0.25) and Vis (≈ 0.16). Same direction as the paper's RNN finding.
+  - **Panel E**: positive regression — better SI ↔ better NC. Reproduces paper Fig. 4E for IN.
+  - **Panel F**: NC vs task MAE shows no within-IN gradient (all points cluster at low MAE), so task performance alone does not predict NC.
+
+### The fig4 cache fix (60 min → 2 min)
+
+First M5 fig4 render hung in computation for over 1h before being killed. Diagnosis: `in_swarm` calls `in_point_for_run` per run, which calls `neural_consistency_from_states` per run, and that function recomputes 3 DMFC-side RDMs (full + 2 split-halves) on every invocation. Each pdist is over (1889 reliable units × ~7000 cells), order GFLOPs, and we did it 40× redundantly because all 40 IN runs share the same DMFC slice (same `T_in=72`, same `occ_end_pad0` mask).
+
+Fix: new `NeuralRDMCache` dataclass + `compute_neural_rdm_cache()` helper at the top of `reproduce_fig4.py`. `in_swarm()` builds the cache once (lazily, on the first non-diverged run so we know `T_in`) and threads it into `in_point_for_run` via an optional `neural_rdm_cache=` parameter. The non-cache path is preserved as a fallback so the original `neural_consistency_from_states` still composes from public surface.
+
+Wall clock dropped from 60+ min (killed before completion) to **~2 min** end-to-end. The cache also exits cleanly when the run dirs have heterogeneous `T_in` (raises with a clear message rather than silently mismatching).
+
+### Stats scaffolding — `dmfc/analysis/stats.py`
+
+Four pure-numerics functions covering the M5 statistical tests. No statsmodels dependency (just scipy + sklearn, both already pinned):
+
+- `time_to_threshold(curves, threshold, time_axis) → (n_models,)` — first time each curve reaches threshold; NaN if it never does.
+- `rmse_auc(rmse_curves, time_axis, window_ms=None) → (n_models,)` — trapezoidal AUC over a window.
+- `wilcoxon_rank_sum(group_a, group_b) → WilcoxonResult` — wraps `scipy.stats.ranksums` plus a rank-biserial effect-size proxy `|Z|/sqrt(n_a+n_b)`.
+- `partial_r2(target, base_predictors, extra_predictors) → float` — R²_full − R²_base for the *change* in R² when adding extra predictors. Note: not the classical (R²_full − R²_base)/(1 − R²_base); M5 calls for the simpler form.
+
+21 tests in `tests/test_stats.py`, including reference-impl checks against scipy/sklearn directly. Smoke-validated against the published 96-RNN gabor_pca subset:
+
+- `time_to_threshold(r=0.5)` per RNN class: mov 984ms, vis-mov 861ms, vis-sim-mov 779ms, sim-mov 902ms — consistent with paper Fig. 5B class ordering.
+- `(1−r)`-AUC over 0–1200 ms: vis-sim-mov is best (lowest accumulated error), matching its highest median r.
+- **NC ~ SI R² = 0.7648** on the 96-RNN swarm — directly reproduces paper Fig. 4E qualitative claim.
+- `wilcoxon_rank_sum(mov, sim-mov)` time-to-r=0.5: z=1.13, p=0.26, effect=0.165 — modest difference between mov and sim-mov on a single metric.
+
+Now ready to plug `runs_m5/` IN points into the formal IN-vs-RNN-class Wilcoxons + partial R² with-vs-without-IN. That's a small driver script (~50 lines) the next session can build.
+
+### Carry-forward
+
+- Two-stage panel for `reproduce_fig5b.py` is still the open M4 task. Now more interesting since we have all 40 IN runs to feed it.
+- Build `dmfc/analysis/run_m5_stats.py` — driver that loads `runs_m5/` IN points + the 96-model RNN swarm, runs the 4 stat tests, emits a results table for the writeup. Should land before M6 starts.
+- The PRD S2/S3 questions now have visual answers landed in the figures; formal Wilcoxon answers need the driver above.
+
+## Milestone 5 prereq — Intercept HP pass + sweep orchestration (2026-04-28)
+
+The M5 prereq from the M4 closeout (Intercept variant `mov` reliably diverges to NaN on seed=0 at default grad_clip=1.0) is closed. Companion deliverable: full M5 sweep orchestration is built and dry-run-validated, ready to fire the moment we want a 40-run cluster sweep.
+
+### Headline result: grad_clip_norm=0.5 wins
+
+All three single-intervention HP candidates survived the seed=0 3K-step smoke (vs the original NaN by step ~800 at default):
+
+| candidate | loss @ 3K | std(eff_receivers) | survived past step 800 |
+|---|---:|---:|:---:|
+| A: lr=5e-4 | 2.62 | 7.25 | ✓ |
+| **B: grad_clip=0.5** | **1.21** | **0.93** | ✓ |
+| C: weight_decay=1e-4 | 1.71 | 0.95 | ✓ |
+
+B picked because (i) best step-3K loss → suggests room to fully converge by 50K, (ii) effect_receivers std (0.93) lands in the same ballpark as the M3 sim-mov pilot (1.31) so the M4 analysis pipeline behavior stays comparable, and (iii) directly addresses the diagnosed failure mode (recurrent gradient runaway from one-scalar supervision).
+
+### Full-sweep confirmation: B is robust across all 5 seeds
+
+Submitted `scripts/submit_intercept_hp.sbatch` as a SLURM array job (`--array=0-4`, `gershman_lab` account, `shared` partition, 2h walltime per task). Full-50K results:
+
+| seed | final step | final loss | std | NaN lines | hidden_states.npz |
+|---:|---:|---:|---:|---:|:---:|
+| 0 | 50000 | 0.0619 | 1.42 | 0 | ✓ |
+| 1 | 50000 | 0.0281 | 0.76 | 0 | ✓ |
+| 2 | 50000 | 0.0423 | 0.83 | 0 | ✓ |
+| 3 | 50000 | 0.0294 | 1.09 | 0 | ✓ |
+| 4 | 50000 | 0.0260 | 1.31 | 0 | ✓ |
+
+Final losses 0.026–0.062 are all in the same regime as the M3 sim-mov pilot's 0.05 EMA. Zero NaN across 5 × 50000 steps. Run dirs under `runs_intercept_hp/in_mov_h10_s{0..4}_20260428-152115_*/`.
+
+### Two SLURM gotchas worth pinning
+
+1. **The first run hit `--time=01:00:00` and TIMEOUT'd 5/5 tasks at step ~47–48K**, leaving no `hidden_states.npz`. CPU on `shared` is meaningfully slower than my 12-min/3K-step smoke estimate (smoke ran on the Claude-shell cluster node directly, not via SLURM). Real-job per-task wall on `shared`: 1:02–1:29. Bumping to `--time=02:00:00` was sufficient. The slow tail variance comes from node-pool contention — first attempt put 4 of 5 tasks on one node, second attempt got 5 different nodes. **For the M5 sweep we kept the 2h budget**.
+2. **`kempner` partition rejects CPU-only jobs.** Their submit hook says: *"You must request a gpu using the --gpus or --gres option to use kempner partition, if you have CPU work for this hardware please use sapphire or shared."* Standard FASRC `shared` partition with `gershman_lab` account works (note the FASRC fairshare account, not `kempner_gershman_lab` which is Kempner-only).
+
+### Sweep orchestration as it actually landed
+
+Pattern follows the Kempner array-jobs handbook recommendation: CSV lookup keyed on `$SLURM_ARRAY_TASK_ID`, dispatch with CLI overrides. Three pieces:
+
+- `scripts/gen_sweep_matrix.py` — generates the canonical 40-row matrix from intent. Records the per-variant HP override rule (mov gets clip=0.5, others stay at 1.0).
+- `scripts/sweep_matrix.csv` — `task_id,variant,config,hidden,seed,grad_clip_norm`. Layout: rows 0–9 mov, 10–19 vis-mov, 20–29 vis-sim-mov, 30–39 sim-mov. Within each variant: 0–4 are hidden=10, 5–9 are hidden=20.
+- `scripts/submit_m5_sweep.sbatch` — `--array=0-39%10` (10 concurrent), reads CSV row, dispatches train.py with `--config / --seed / --effect-dim / --grad-clip-norm`. Run artifacts at `runs_m5/in_<variant>_h<hidden>_s<seed>_<ts>_<git>/`.
+
+Three new train.py CLI flags landed (mirroring the existing `--seed`, `--max-steps` pattern): `--effect-dim`, `--lr`, `--grad-clip-norm`, `--weight-decay`. `TrainingConfig.grad_clip_norm` and `weight_decay` are now first-class fields with defaults preserving prior behavior. The original module constant `GRAD_CLIP_NORM` is still in train.py as a default-source comment but no longer used.
+
+### Validation done before declaring orchestration ready
+
+- CSV-lookup awk logic verified for task IDs 0, 5, 10, 25, 39 (variant/hidden/seed boundaries).
+- `--effect-dim 20` smoke run: produces `effect_receivers (79, 72, 2, 20)` artifact + saved `config.yaml` shows `effect_dim: 20`.
+- `sbatch --test-only scripts/submit_m5_sweep.sbatch` accepted by SLURM (commits to a real start time).
+- Did NOT submit for real yet — waiting for an explicit M5 launch decision.
+
+### Carry-forward to M5 launch
+
+When ready: `sbatch scripts/submit_m5_sweep.sbatch`. Then on completion:
+
+- `python -m dmfc.analysis.reproduce_fig5b --in-runs 'runs_m5/in_*' --rajalingham-data data/dmfc/` regenerates Fig. 5B with all 40 IN points (per CLAUDE.md command convention).
+- Same for `reproduce_fig4.py`. The diverged-run NaN-skipping path is already in place.
+- M5 stat tests (Wilcoxon IN vs RNN class for time-to-threshold-r and SI/NC distributions) need a new `dmfc/analysis/stats.py` — separate task, can land before or after the sweep finishes.
+
+The existing 5 Intercept HP run dirs at `runs_intercept_hp/in_mov_h10_*` are functionally equivalent to the first 5 rows of the M5 sweep (mov, h=10, seeds 0–4, clip=0.5). If we wanted to save the ~5h × 5 = ~25h of cluster time, we could symlink them into `runs_m5/` rather than re-train. **Open question for M5 launch**: do that vs re-train for cleanliness?
+
 ## Milestone 4 final close — Fig. 4 + pipeline validation (2026-04-27)
 
 Two remaining M4 sub-tasks landed in one pass: `reproduce_fig4.py` (PRD F4 secondary deliverable) and pipeline validation (PRD S1, rescoped). Test count 94→104; ruff + mypy clean. Plan file: `~/.claude/plans/can-we-continue-looking-linear-lantern.md`.

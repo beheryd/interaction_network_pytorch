@@ -193,6 +193,49 @@ def in_curves(run_dirs: list[Path], t_axis: np.ndarray) -> list[CurveOnGrid]:
     return [_in_curve_for_run(d, t_axis) for d in run_dirs]
 
 
+def aggregate_in_curves_by_class(
+    run_dirs: list[Path],
+    t_axis: np.ndarray,
+    n_splits: int = 5,
+) -> list[CurveOnGrid]:
+    """Per-loss-class IN curves: mean + SEM across all runs in the class.
+
+    Replaces the spaghetti-of-40-lines fig5b plot with one line per loss
+    class (the M5 sweep produces 10 runs per class — 2 hidden × 5 seeds —
+    so the legend stays manageable and the seed-to-seed variance shows up
+    as a SEM band rather than a curve cloud).
+
+    Run dirs grouped by ``config.training.loss_variant``; classes with no
+    runs are skipped. Curves with NaN at a given timestep contribute
+    nothing there (``np.nanmean`` / ``np.nanstd``) so trial-end volatility
+    doesn't bias the mean.
+    """
+    by_class: dict[str, list[np.ndarray]] = {c: [] for c in RNN_CLASS_ORDER}
+    for d in run_dirs:
+        cfg = load_config(d / "config.yaml")
+        loss_class = cfg.training.loss_variant
+        if loss_class not in by_class:
+            continue
+        curve = _in_curve_for_run(d, t_axis, n_splits=n_splits)
+        by_class[loss_class].append(curve.r_mean)
+
+    out: list[CurveOnGrid] = []
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", r"Mean of empty slice", RuntimeWarning)
+        warnings.filterwarnings("ignore", r"Degrees of freedom", RuntimeWarning)
+        for loss_class in RNN_CLASS_ORDER:
+            stacked = by_class[loss_class]
+            if not stacked:
+                continue
+            arr = np.stack(stacked, axis=0)  # (n_runs_in_class, T)
+            mean = np.nanmean(arr, axis=0)
+            n_runs = arr.shape[0]
+            sem = np.nanstd(arr, axis=0, ddof=1) / np.sqrt(n_runs) if n_runs > 1 else None
+            label = f"IN: {RNN_CLASS_LABELS[loss_class]} (n={n_runs})"
+            out.append(CurveOnGrid(t_ms=t_axis, r_mean=mean, r_sem=sem, label=label))
+    return out
+
+
 def plot_fig5b(
     dmfc: CurveOnGrid,
     rnns: list[CurveOnGrid],
@@ -201,12 +244,29 @@ def plot_fig5b(
     title: str = "Endpoint decoding over time (Fig. 5B extended)",
     xlim_ms: tuple[float, float] = (0.0, 1200.0),
 ) -> None:
-    fig, ax = plt.subplots(figsize=(7.0, 4.5))
+    """Render the extended Fig. 5B.
 
-    # DMFC: bold orange
-    ax.plot(dmfc.t_ms, dmfc.r_mean, color="#d97706", lw=2.5, label=dmfc.label)
+    Color convention (per user direction 2026-04-28):
 
-    # RNN classes: greys with shaded SEM bands
+    * **DMFC** — black, bold.
+    * **RNN classes** — grey family, kept since the rapid-vs-slow rise vs
+      DMFC is the central comparison this figure exists for.
+    * **IN classes** — palette matched to Fig. 4 panel D
+      (:data:`IN_CLASS_LINE_PALETTE`): Intercept blue, Vis green, Vis+Occ
+      red, Vis&Occ orange. Each line has a translucent ±SEM band when
+      ``r_sem`` is set (i.e. for class-aggregated curves with n_runs > 1).
+
+    ``ins`` may be either per-run curves (one line per ``runs/in_*``) or
+    per-class aggregates (one mean+SEM curve per loss class — see
+    :func:`aggregate_in_curves_by_class`). For the M5 sweep with 40 runs
+    the per-class form is the only legible option.
+    """
+    fig, ax = plt.subplots(figsize=(7.5, 4.7))
+
+    # DMFC — black, bold.
+    ax.plot(dmfc.t_ms, dmfc.r_mean, color="black", lw=2.5, label=dmfc.label)
+
+    # RNN classes — grey family.
     rnn_palette = ["#9ca3af", "#6b7280", "#4b5563", "#1f2937"]
     for i, c in enumerate(rnns):
         color = rnn_palette[i % len(rnn_palette)]
@@ -217,15 +277,24 @@ def plot_fig5b(
                 c.r_mean - c.r_sem,
                 c.r_mean + c.r_sem,
                 color=color,
-                alpha=0.18,
+                alpha=0.15,
                 linewidth=0,
             )
 
-    # IN runs: blue family
-    in_palette = ["#1d4ed8", "#2563eb", "#3b82f6", "#60a5fa", "#93c5fd"]
-    for i, c in enumerate(ins):
-        color = in_palette[i % len(in_palette)]
+    # IN curves — Fig. 4 palette per loss class. The label format
+    # "IN: <Class> (n=...)" exposes the loss class so we can route color.
+    for c in ins:
+        color = _in_curve_color(c.label)
         ax.plot(c.t_ms, c.r_mean, color=color, lw=2.0, label=c.label)
+        if c.r_sem is not None:
+            ax.fill_between(
+                c.t_ms,
+                c.r_mean - c.r_sem,
+                c.r_mean + c.r_sem,
+                color=color,
+                alpha=0.20,
+                linewidth=0,
+            )
 
     ax.set_xlabel("Time from trial start (ms)")
     ax.set_ylabel("Endpoint decoding (Pearson r)")
@@ -238,6 +307,46 @@ def plot_fig5b(
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, dpi=150)
     plt.close(fig)
+
+
+# ---------------------------------------------------------------------------
+# IN palette resolution — match Fig. 4 panel D
+
+
+# Per-class IN line color, matched to Fig. 4 panel D (see
+# ``IN_CLASS_PALETTE`` in ``reproduce_fig4.py``). Defined here too so this
+# module doesn't import from reproduce_fig4 (would be a circular import).
+IN_CLASS_LINE_PALETTE: dict[str, str] = {
+    "mov": "#1f77b4",
+    "vis-mov": "#2ca02c",
+    "vis-sim-mov": "#d62728",
+    "sim-mov": "#ff7f0e",
+}
+IN_FALLBACK_COLOR: str = "#1f77b4"
+
+
+def _in_curve_color(label: str) -> str:
+    """Resolve a CurveOnGrid label like 'IN: Vis+Occ (...)' to its class color.
+
+    We look up the human-readable class name (the value of
+    :data:`RNN_CLASS_LABELS`) to find the underlying ``loss_weight_type``
+    key, then index :data:`IN_CLASS_LINE_PALETTE`. Falls back to blue if
+    no match (e.g. if a caller passes a non-standard label).
+
+    Substring matching is order-sensitive: ``"Vis"`` is a substring of
+    ``"Vis+Occ"`` and ``"Vis&Occ"``, so we iterate longest-label-first to
+    let the more specific names ("Vis&Occ", "Vis+Occ") win before the
+    bare "Vis". Exact-match would also work but breaks if a future label
+    suffixes the class name with extra metadata.
+    """
+    label_to_class = sorted(
+        ((v, k) for k, v in RNN_CLASS_LABELS.items()),
+        key=lambda pair: -len(pair[0]),
+    )
+    for human, machine in label_to_class:
+        if human in label:
+            return IN_CLASS_LINE_PALETTE.get(machine, IN_FALLBACK_COLOR)
+    return IN_FALLBACK_COLOR
 
 
 def _expand_run_dirs(patterns: list[str]) -> list[Path]:
@@ -292,6 +401,18 @@ def main(argv: list[str] | None = None) -> None:
         metavar=("MIN_MS", "MAX_MS"),
         help="Display range for the x-axis (curves are still computed on the full window).",
     )
+    parser.add_argument(
+        "--in-aggregation",
+        choices=("by-class", "per-run"),
+        default="by-class",
+        help=(
+            "How to summarize IN runs in the figure. 'by-class' (default): "
+            "one line per loss class with ±SEM band across all runs in the "
+            "class — the right view when there are many runs (M5 sweep). "
+            "'per-run': one line per run, no aggregation — only legible for "
+            "≤4 runs."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if args.align == "onset":
@@ -318,8 +439,14 @@ def main(argv: list[str] | None = None) -> None:
     print("[fig5b] aggregating RNN per-class curves ...")
     rnns = rnn_class_curves(rnn_data, t_axis)
 
-    print("[fig5b] decoding IN run(s) ...")
-    ins = in_curves(run_dirs, t_axis)
+    if args.in_aggregation == "by-class":
+        print(
+            f"[fig5b] decoding IN run(s) and aggregating by loss class ({len(run_dirs)} runs) ..."
+        )
+        ins = aggregate_in_curves_by_class(run_dirs, t_axis, n_splits=args.n_splits)
+    else:
+        print("[fig5b] decoding IN run(s) ...")
+        ins = in_curves(run_dirs, t_axis)
 
     print(f"[fig5b] writing figure to {args.out}")
     plot_fig5b(dmfc, rnns, ins, out_path=args.out, xlim_ms=tuple(args.xlim_ms))  # type: ignore[arg-type]
@@ -336,8 +463,10 @@ __all__: list[Any] = [
     "dmfc_curve",
     "rnn_class_curves",
     "in_curves",
+    "aggregate_in_curves_by_class",
     "plot_fig5b",
     "main",
     "RNN_CLASS_ORDER",
     "RNN_CLASS_LABELS",
+    "IN_CLASS_LINE_PALETTE",
 ]

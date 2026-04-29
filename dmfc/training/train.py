@@ -45,10 +45,11 @@ from dmfc.training.losses import OUTPUT_DIM, compute_loss
 
 DT_MS: int = 50
 INTEGRATOR_DT_MS: int = 41
-# Clip the global gradient norm. The recurrent IN feeds prev_effect_receivers
+# Default gradient norm clip. The recurrent IN feeds prev_effect_receivers
 # back into the next-step object features; without clipping the second pilot
 # trained well to step ~10K then diverged when the recurrent state grew
-# unbounded. 1.0 is the standard choice for RNN training.
+# unbounded. 1.0 is the standard choice for RNN training. Per-run overrides
+# live in TrainingConfig.grad_clip_norm.
 GRAD_CLIP_NORM: float = 1.0
 
 
@@ -198,7 +199,11 @@ def train(cfg: RunConfig, run_dir: Path, logger: logging.Logger) -> torch.nn.Mod
     n_params = sum(p.numel() for p in model.parameters())
     logger.info(f"model params: {n_params}")
 
-    optimizer = optim.Adam(model.parameters(), lr=cfg.training.lr)
+    optimizer = optim.Adam(
+        model.parameters(),
+        lr=cfg.training.lr,
+        weight_decay=cfg.training.weight_decay,
+    )
     rng = np.random.default_rng(cfg.seed)
 
     if cfg.training.conditions_per_batch_source == "canonical_79":
@@ -222,7 +227,7 @@ def train(cfg: RunConfig, run_dir: Path, logger: logging.Logger) -> torch.nn.Mod
             )
             optimizer.zero_grad()
             loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), GRAD_CLIP_NORM)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.training.grad_clip_norm)
             optimizer.step()
 
             if step % cfg.training.log_every == 0 or step == 1:
@@ -302,6 +307,30 @@ def parse_args() -> argparse.Namespace:
         default="runs",
         help="root directory for run artifacts",
     )
+    parser.add_argument(
+        "--effect-dim",
+        type=int,
+        default=None,
+        help="overrides model.effect_dim (HP sweeps)",
+    )
+    parser.add_argument(
+        "--lr",
+        type=float,
+        default=None,
+        help="overrides training.lr (HP sweeps)",
+    )
+    parser.add_argument(
+        "--grad-clip-norm",
+        type=float,
+        default=None,
+        help="overrides training.grad_clip_norm (HP sweeps)",
+    )
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=None,
+        help="overrides training.weight_decay (HP sweeps)",
+    )
     return parser.parse_args()
 
 
@@ -310,8 +339,19 @@ def main() -> int:
     cfg = load_config(args.config)
     if args.seed is not None:
         cfg = replace(cfg, seed=args.seed)
+    if args.effect_dim is not None:
+        cfg = replace(cfg, model=replace(cfg.model, effect_dim=args.effect_dim))
+    train_overrides: dict = {}
     if args.max_steps is not None:
-        cfg = replace(cfg, training=replace(cfg.training, max_steps=args.max_steps))
+        train_overrides["max_steps"] = args.max_steps
+    if args.lr is not None:
+        train_overrides["lr"] = args.lr
+    if args.grad_clip_norm is not None:
+        train_overrides["grad_clip_norm"] = args.grad_clip_norm
+    if args.weight_decay is not None:
+        train_overrides["weight_decay"] = args.weight_decay
+    if train_overrides:
+        cfg = replace(cfg, training=replace(cfg.training, **train_overrides))
 
     seed_everything(cfg.seed)
     # CPU determinism: PyTorch ops are deterministic on CPU by default for the

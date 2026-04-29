@@ -11,4 +11,9 @@ training:
   log_every: 100
   checkpoint_every: 5000
   conditions_per_batch_source: random
+  # Intercept (mov) supervises only output[6] — one scalar per condition. With
+  # the default grad_clip_norm=1.0 the recurrent loop diverges to NaN by step
+  # ~800 on seed=0. Stricter clipping at 0.5 stabilizes training across seeds;
+  # see SCRATCHPAD M5 prereq HP pass (2026-04-28). Other variants stay at 1.0.
+  grad_clip_norm: 0.5
 seed: 0

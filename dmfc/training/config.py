@@ -31,6 +31,8 @@ class TrainingConfig:
     log_every: int = 100
     checkpoint_every: int = 5000
     conditions_per_batch_source: str = "random"  # "random" or "canonical_79"
+    grad_clip_norm: float = 1.0
+    weight_decay: float = 0.0
 
     def __post_init__(self) -> None:
         if self.loss_variant not in LOSS_VARIANTS:
@@ -43,6 +45,10 @@ class TrainingConfig:
             raise ValueError(
                 f"unsupported conditions_per_batch_source {self.conditions_per_batch_source!r}"
             )
+        if self.grad_clip_norm <= 0:
+            raise ValueError(f"grad_clip_norm must be positive; got {self.grad_clip_norm}")
+        if self.weight_decay < 0:
+            raise ValueError(f"weight_decay must be non-negative; got {self.weight_decay}")
 
 
 @dataclass(frozen=True)

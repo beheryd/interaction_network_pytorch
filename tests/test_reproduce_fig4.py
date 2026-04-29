@@ -130,6 +130,7 @@ def test_plot_fig4_writes_png(tmp_path: Path) -> None:
             loss_class="vis-mov",
             nc=0.30,
             si=1.5,
+            task_mae=0.2,
             label="IN: Vis (h10 s0)",
             n_hidden=10,
             seed=0,
