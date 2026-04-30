@@ -6,6 +6,51 @@
 
 ## NOTES
 
+## Milestone 5 stats driver — paper-aligned reporting for both figures (2026-04-29 PM)
+
+The two M5 figures already existed; this session produced the numerical summaries that back them in the writeup. Driver at `dmfc/analysis/run_m5_stats.py`; outputs at `figures/m5_stats.{txt,json}`. Test count 254→261 (`tests/test_run_m5_stats.py`, 7 tests). Ruff + format clean.
+
+### What we report and why
+
+The original M5 plan (TASKS.md) called for a Wilcoxon battery (IN-vs-RNN-class on time-to-r=0.5 + RMSE-AUC; IN-NC vs each RNN class). Per user direction this session, we **rescoped to exactly what Rajalingham reports for the homologous panels** rather than adding tests the paper doesn't:
+
+- Paper Fig. 5B caption test: *"DMFC predictions were significantly more accurate than the shuffled control for all time points following t = 250 ms (p < 10⁻¹⁰, two-sided permutation test)"* → we run the same test on the DMFC endpoint decoder.
+- Paper Fig. 4 D/E/F captions are descriptive; the quantitative NC-vs-SI / NC-vs-task-perf relationship is in **Supp. Fig. S6B/E** as Raw R² + Partial R² → we compute these on the IN swarm.
+
+The Wilcoxon scaffolding in `dmfc/analysis/stats.py` stays (still useful and tested), it just isn't the M5 deliverable.
+
+### Headline numbers
+
+**Fig. 5B — DMFC vs shuffled control** (10,000 label permutations across 79 conditions; per-timestep two-sided p with `(c+1)/(n+1)` smoothing):
+
+- DMFC's endpoint decoder beats shuffled control at **p < 10⁻⁴ for all t ≥ 200 ms** in [0, 1200 ms].
+- Permutation floor 1/(N+1) = 10⁻⁴ at this N. The paper's `p < 10⁻¹⁰` is asymptotic and unsupported by their N=100 CV splits — we report the honest floor we can resolve. For a writeup: *"first t at which p stays below 10⁻⁴ for the rest of the [0, 1200 ms] window: 200 ms"*.
+- Real DMFC r in window: min −0.029 (at t=0), median 0.853, max 0.897 — quantitatively consistent with the figure's rapid rise.
+
+**Fig. 4 — Raw R² + Partial R² of NC on the IN swarm** (40 IN runs, OLS via `partial_r2` from `dmfc.analysis.stats`):
+
+| Quantity | Value |
+|---|---:|
+| Raw R²(NC ~ SI) | **0.5496** |
+| Raw R²(NC ~ task MAE) | 0.0143 |
+| Raw R²(NC ~ SI + task MAE) | 0.5853 |
+| Partial R²(SI given task MAE) | **0.5710** |
+| Partial R²(task MAE given SI) | 0.0357 |
+
+Direction matches the paper's qualitative finding: simulation capacity (SI) is the main predictor of NC; raw task fit adds essentially nothing once SI is known. The IN swarm's NC-vs-SI structure is therefore not just visually similar to the RNN swarm's — it has the same statistical signature.
+
+### One implementation detail worth pinning
+
+The naive permutation null (re-run `decode_endpoint` per shuffle) was ~22 s/permutation × 10⁴ = ~62 hours, intractable. Replaced with a **fast path** that factorizes each (fold, t) train-feature matrix once via `np.linalg.pinv`, then computes the OLS coefficients for every permuted label vector by a single `(y_perm_centered) @ pinv.T` matmul. Predictions on the held-out fold and the per-permutation Pearson r are then vectorized across permutations in `_row_pearson`. Bit-for-bit identical to the slow path on a synthetic 30-cond × 8-t × 12-feat sanity check (max abs diff 8.9e-16); end-to-end driver wall clock dropped from ~62h to **~9 min** for N=10⁴ permutations + the 40-run IN R² panel.
+
+The fast path lives in `_decode_real_and_perm`. It assumes (i) `LinearRegression` with intercept (we center predictors and labels per fold), (ii) un-regularized OLS so `pinv` gives the same solution as sklearn (sklearn `LinearRegression` uses LAPACK least-squares; both give the minimum-norm solution when the system is underdetermined). The pseudoinverse approach is a strict superset of sklearn's behavior here.
+
+### Carry-forward
+
+- **Two-stage panel** for `reproduce_fig5b.py` is still the open M4-era task. Most useful now in the writeup as the within-IN counterpart to Fig. 5B's input-asymmetry caveat; the analysis module exists and runs end-to-end.
+- The original M5 Wilcoxon battery is **descoped** in line with the paper's reporting style. Re-engage if the writeup reviewer asks for IN vs RNN class formally.
+- Re-running `run_m5_stats.py` is a one-liner: `python -m dmfc.analysis.run_m5_stats --in-runs 'runs_m5/in_*'`.
+
 ## Milestone 5 sweep + figures + stats scaffolding (2026-04-29)
 
 Three work blocks landed in one push: (1) the full 40-run M5 sweep, (2) the two M5 figures regenerated on it, (3) `dmfc/analysis/stats.py` so the formal Wilcoxon/partial-R² stage is unblocked. The M5 sweep ran clean from end to end and reproduces Rajalingham's main structural findings.
